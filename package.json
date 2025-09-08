@@ -1,0 +1,24 @@
+{
+  "type": "module",
+  "name": "scalejs",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --watch bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag",
+    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.14.0",
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17"
+  },
+  "dependencies": {
+    "typescript": "^5.9.2"
+  }
+}

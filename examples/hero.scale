@@ -1,0 +1,10 @@
+<script>
+  export let count = 2;
+  $: doubled = count * 2;
+</script>
+
+<section class="p-6">
+  <p>Count: {count}</p>
+  <p>Doubled: {doubled}</p>
+  <button on:click="dispatch('inc')">+1</button>
+</section>
