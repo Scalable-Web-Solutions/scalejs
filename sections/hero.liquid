@@ -1,0 +1,56 @@
+<script src="{{ 'test-tag.js' | asset_url }}" defer></script>
+
+<test-tag
+         class="scale-{{ section.id }}"
+         title="{{ section.settings.title }}" sub="{{ section.settings.sub }}" cta_label="{{ section.settings.cta_label }}" cta_url="{{ section.settings.cta_url }}"
+       ></test-tag>
+
+{% schema %}
+{
+  "name": "'Hero",
+  "settings": [
+    {
+      "id": "title",
+      "label": "title",
+      "type": "text",
+      "default": "\"Permaculture\""
+    },
+    {
+      "id": "sub",
+      "label": "sub",
+      "type": "text",
+      "default": "\"Nature-based learning\""
+    },
+    {
+      "id": "cta_label",
+      "label": "cta_label",
+      "type": "text",
+      "default": "\"Explore\""
+    },
+    {
+      "id": "cta_url",
+      "label": "cta_url",
+      "type": "text",
+      "default": "\"/collections/all\""
+    }
+  ],
+  "blocks": [
+    {
+      "type": "slot-extra",
+      "name": "Slot: extra",
+      "settings": [
+        {
+          "type": "richtext",
+          "id": "content",
+          "label": "Content"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "name": "'Hero"
+    }
+  ]
+}
+{% endschema %}

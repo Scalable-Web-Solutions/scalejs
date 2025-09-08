@@ -1,10 +1,20 @@
 <script>
-  export let count = 2;
-  $: doubled = count * 2;
+  export let title = "Permaculture";
+  export let sub = "Nature-based learning";
+  export let cta_label = "Explore";
+  export let cta_url = "/collections/all";
 </script>
 
-<section class="p-6">
-  <p>Count: {count}</p>
-  <p>Doubled: {doubled}</p>
-  <button on:click="dispatch('inc')">+1</button>
+<!-- tw:safelist hover:bg-emerald-800 -->
+<style></style>
+
+<section class="p-8 bg-emerald-50 rounded-2xl">
+  <div class="space-y-3">
+    <h1 class="text-3xl md:text-5xl font-extrabold text-emerald-900">{title}</h1>
+    <p class="text-emerald-700">{sub}</p>
+    <a class="inline-block mt-4 px-5 py-3 rounded-xl bg-emerald-700 text-white hover:bg-emerald-800" href="{cta_url}">
+      {cta_label}
+    </a>
+    <slot name="extra"></slot>
+  </div>
 </section>

@@ -3,10 +3,11 @@
   "name": "scalejs",
   "version": "1.0.0",
   "description": "",
+  "bin": "bin/scalejs.js",
   "scripts": {
     "build": "tsc",
-    "dev": "node --watch bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag",
-    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag"
+    "dev": "node bin/watch.js",
+    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag --emit-liquid sections/hero.liquid --section-name 'Hero (ScaleJS)' --mode wc"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +20,7 @@
     "tailwindcss": "^3.4.17"
   },
   "dependencies": {
+    "chokidar": "^4.0.3",
     "typescript": "^5.9.2"
   }
 }
