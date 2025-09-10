@@ -1,5 +1,5 @@
 // src/compiler/script-compiler.ts
-import ts from "typescript";
+import * as ts from "typescript";
 
 export type ScriptCompileOptions = {
   exportedPropNames: string[];
@@ -13,8 +13,29 @@ export type ScriptCompileResult = {
   modulePreamble: string;  // import lines if allowImports=true, else ""
 };
 
+function createMethodCompat(
+  name: string | ts.Identifier,
+  parameters: ts.NodeArray<ts.ParameterDeclaration>,
+  body: ts.Block
+): ts.MethodDeclaration {
+  const F = ts.factory;
+  const id = typeof name === 'string' ? F.createIdentifier(name) : name;
+  // Older TS (8-arg signature)
+  return (F.createMethodDeclaration as any)(
+    /*modifiers*/ undefined,
+    /*asteriskToken*/ undefined,
+    id,
+    /*questionToken*/ undefined,
+    /*typeParameters*/ undefined,
+    parameters,
+    /*type*/ undefined,
+    body
+  );
+}
+
+
 export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOptions): ScriptCompileResult {
-  const source = ts.createSourceFile("comp.ts", scriptSrc, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  const source = ts.createSourceFile("comp.ts", scriptSrc, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TSX);
   const props = new Set(opt.exportedPropNames);
 
   const moduleImports: ts.Statement[] = [];
@@ -210,25 +231,40 @@ export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOption
     const node = tr.transformed[0];
 
     // Emit as class method
-    const method = ts.factory.createMethodDeclaration(
-      undefined, undefined, m.name, undefined, undefined,
-      (m.params ?? ts.factory.createNodeArray([])) as any,
-      undefined,
+    const method = createMethodCompat(
+    m.name,
+      (m.params ?? ts.factory.createNodeArray([])) as ts.NodeArray<ts.ParameterDeclaration>,
       (node as any).body ?? ts.factory.createBlock([], true)
     );
     methodCodes.push(printer.printNode(ts.EmitHint.Unspecified, method, source));
+
     tr.dispose();
   }
 
   // Optionally transform top-level (rare). We keep it but don’t emit by default.
   let topLevelCode = "";
   if (topLevelStmts.length) {
-    const locals = collectLocals(source);
-    const tr = ts.transform(ts.factory.createNodeArray(topLevelStmts) as any, [makeRewriter(locals)]);
-    const nodes = (tr.transformed[0] as any).statements as ts.Node[];
-    topLevelCode = nodes.map(n => printer.printNode(ts.EmitHint.Unspecified, n, source)).join("\n");
-    tr.dispose();
-  }
+  const locals = collectLocals(source);
+
+  // ✅ wrap in a Block so transform returns a node with `.statements`
+  const block = ts.factory.createBlock(
+    topLevelStmts as ts.Statement[],
+    /*multiLine*/ true
+  );
+
+  const tr = ts.transform(block, [makeRewriter(locals)]);
+  const newBlock = tr.transformed[0] as ts.Block;
+
+  // Defensive: handle unexpected shapes
+  const stmts = ts.isBlock(newBlock) ? newBlock.statements : ts.factory.createNodeArray([]);
+
+  topLevelCode = Array.from(stmts).map(
+    n => printer.printNode(ts.EmitHint.Unspecified, n, source)
+  ).join("\n");
+
+  tr.dispose();
+}
+
 
   // Imports (if allowed)
   let modulePreamble = "";
@@ -245,12 +281,86 @@ export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOption
 }
 
 /* -------------- small helpers -------------- */
+// Replace your existing stripExport with this version:
 function stripExport<T extends ts.Node>(node: T): T {
-  if (!('modifiers' in node) || !node.modifiers) return node;
-  const mods = (node.modifiers as ts.ModifierLike[]).filter(m => m.kind !== ts.SyntaxKind.ExportKeyword);
+  // If there are no modifiers, nothing to strip.
+  // Some TS versions store modifiers as NodeArray, others undefined.
   // @ts-ignore
-  return ts.factory.updateModifiers ? ts.factory.updateModifiers(node, mods) : ts.factory.updateNode(node, { modifiers: mods });
+  const mods = (node.modifiers as ts.NodeArray<ts.ModifierLike> | undefined)?.filter(
+    m => m.kind !== ts.SyntaxKind.ExportKeyword && m.kind !== ts.SyntaxKind.DefaultKeyword
+  );
+
+  if (!mods) return node;
+
+  const F = ts.factory;
+
+  if (ts.isFunctionDeclaration(node)) {
+    return F.updateFunctionDeclaration(
+      node,
+      mods,
+      node.asteriskToken,
+      node.name,
+      node.typeParameters,
+      node.parameters,
+      node.type,
+      node.body
+    ) as unknown as T;
+  }
+
+  if (ts.isVariableStatement(node)) {
+    return F.updateVariableStatement(
+      node,
+      mods,
+      node.declarationList
+    ) as unknown as T;
+  }
+
+  if (ts.isClassDeclaration(node)) {
+    return F.updateClassDeclaration(
+      node,
+      mods,
+      node.name,
+      node.typeParameters,
+      node.heritageClauses,
+      node.members
+    ) as unknown as T;
+  }
+
+  if (ts.isInterfaceDeclaration(node)) {
+    return F.updateInterfaceDeclaration(
+      node,
+      mods,
+      node.name,
+      node.typeParameters,
+      node.heritageClauses,
+      node.members
+    ) as unknown as T;
+  }
+
+  if (ts.isEnumDeclaration(node)) {
+    return F.updateEnumDeclaration(
+      node,
+      mods,
+      node.name,
+      node.members
+    ) as unknown as T;
+  }
+
+  if (ts.isTypeAliasDeclaration(node)) {
+    return F.updateTypeAliasDeclaration(
+      node,
+      mods,
+      node.name,
+      node.typeParameters,
+      node.type
+    ) as unknown as T;
+  }
+
+  // Fallback: leave node as-is if it's some other stmt kind.
+  return node;
 }
+
+
 function isAssignmentOperator(k: ts.SyntaxKind){
   return k === ts.SyntaxKind.EqualsToken ||
          k === ts.SyntaxKind.PlusEqualsToken ||
@@ -276,11 +386,12 @@ function compoundToBinary(k: ts.SyntaxKind){
     case ts.SyntaxKind.BarEqualsToken: return ts.SyntaxKind.BarToken;
     case ts.SyntaxKind.CaretEqualsToken: return ts.SyntaxKind.CaretToken;
     case ts.SyntaxKind.LessThanLessThanEqualsToken: return ts.SyntaxKind.LessThanLessThanToken;
-    case ts.SyntaxKind.GreaterThanGreaterThanEqualsToken: return ts.ScriptTarget.ES2022, ts.SyntaxKind.GreaterThanGreaterThanToken;
+    case ts.SyntaxKind.GreaterThanGreaterThanEqualsToken: return ts.SyntaxKind.GreaterThanGreaterThanToken; // <- fixed
     case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken: return ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken;
     default: return ts.SyntaxKind.PlusToken;
   }
 }
+
 function pushes(assigns: ts.Expression[], F: ts.NodeFactory, name: string, sel: ts.Expression){
   assigns.push(
     F.createBinaryExpression(

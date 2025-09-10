@@ -1,28 +1,19 @@
 <script>
-  export let loggedIn = true;
-  export let user = "Guest";
+  export let count = 0;
+  $: doubled = count*100;
+  $: label = `${doubled} clicks`;
+  function inc(){ count += 1; }
 
-  function signup() {
-    user = 'Chik3';
-    loggedIn = true;
-  }
-
-  function logout() {
-    user = 'Guest';
-    loggedIn = false;
-  }
+  let goat = [
+    { name: 'goat1', age: 1 },
+    { name: 'goat2', age: 2 },
+    { name: 'goat3', age: 3 },
+  ]
 </script>
 
-<section class="p-6">
-  <h2>Hello <strong>{user}</strong></h2>
+<button @click="inc()" class="">{label}</button>
 
-  {#if loggedIn}
-    <p>Welcome back, {user}!</p>
-    <button on:click="dispatch('logout')">Log out</button>
-  {:else if user !== 'Guest'}
-    <p>Almost there, {user}. Please log in.</p>
-  {:else}
-    <p>Welcome! Please create an account.</p>
-    <button on:click="dispatch('signup')">Sign up</button>
-  {/if}
-</section>
+{#each goat as g}
+  <div>{g.name}</div>
+  <div>{g.age}</div>
+{/each}

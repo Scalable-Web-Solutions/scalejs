@@ -8,9 +8,9 @@ import { generateLiquid } from './compiler/liquid.js';
 export async function compileFile(opts: { input: string; out: string; tag: string; emitLiquid?: string; mode?: "wc"|"liquid"; sectionName?: string; })
 {
   const src = await fs.readFile(opts.input, 'utf8');
-  const { script, style, template, props } = parseScale(src);
+  const { script, style, template, props, derived } = parseScale(src);
   const twCss = await buildTwForTemplate(template);
-  const code = generateIIFE({ tag: opts.tag, script, style: `${twCss}\n${style || ""}`, template, props });
+  const code = generateIIFE({ tag: opts.tag, script, style: `${twCss}\n${style || ""}`, template, props, derived });
   await fs.mkdir(path.dirname(opts.out), { recursive: true });
   await fs.writeFile(opts.out, code, 'utf8');
 

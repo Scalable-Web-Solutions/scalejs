@@ -1,0 +1,13 @@
+<script>
+    export let count = 0;
+    function inc(n = 1) { count += n; }
+</script>
+
+<section>
+    {#if count > 0}
+        <p>Count is positive at {count}</p>
+    {:else}
+        <p>Count is zero</p>
+    {/if}
+    <button @click="inc(1)">+1</button>
+</section>
