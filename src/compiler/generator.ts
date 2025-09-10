@@ -1,5 +1,5 @@
-import type { Prop, Derived } from "./parser.js"
 import { compileScriptToClass } from "./script-compiler.js";
+import { Derived, Prop } from "./types.js";
 
 /**
  * Node-based codegen v1 + IF blocks:
@@ -18,38 +18,37 @@ export function generateIIFE(opts: {
 }) {
   const { tag, script, style, template, props, derived } = opts;
 
+  const raw = template;
+
+  const cond = transformConditionals(raw);
+  const each = transformEachLoops(cond.html);
+
   // 0) TEXT bindings: turn {expr} into <sws-bind data-expr="expr">
-  const templInterpolations = template.replace(
-    /\{([^}]+)\}/g,
-    (_m, expr) => `<sws-bind data-expr="${expr.trim()}"></sws-bind>`
-  );
-
-
-  // 1.5) EACH transform: replace each-blocks with <sws-each data-id="ID"/> anchors, record meta
-  const each = transformEachLoops(templInterpolations);
-
-  // 1) IF transform: replace if-blocks with <sws-if data-id="ID"/> anchors, record meta
-  const cond = transformConditionals(each.html);
+  const interpolatedBase = interpolateExpr(each.html)
 
   // 2) Event pre-pass for base HTML
-  const baseEvt = prepassEvents(cond.html);
+  const baseEvt = prepassEvents(interpolatedBase);
 
   // 3) Event pre-pass per IF branch (and keep the *html* with the same IDs!)
-  const branchPrepass: Array<Record<string, { html: string; events: BranchEvent[] }>> =
-    cond.blocks.map(b => {
-      const map: Record<string, { html: string; events: BranchEvent[] }> = {};
-      for (const br of b.branches) {
-        map[br.id] = prepassEvents(br.html); // { html, events } with consistent IDs
-      }
-    if (b.elseBranch) map[b.elseBranch.id] = prepassEvents(b.elseBranch.html);
-    return map;
-  });
+  const branchPrepass = cond.blocks.map(b => {
+  const map: Record<string, { html: string; events: BranchEvent[] }> = {};
+  for (const br of b.branches) {
+    const ih = interpolateExpr(br.html);
+    map[br.id] = prepassEvents(ih);
+  }
+  if (b.elseBranch) {
+    const ih = interpolateExpr(b.elseBranch.html);
+    map[b.elseBranch.id] = prepassEvents(ih);
+  }
+  return map;
+});
 
   // Prepass Each
   const eachPrepass = each.block.map(b => {
-    const pre = prepassEvents(b.items);
-    return {id: b.id, params: b.params, html: pre.html, events: pre.events};
-  });
+  const ih = interpolateExpr(b.items);
+  const pre = prepassEvents(ih);
+  return { id: b.id, params: b.params, html: pre.html, events: pre.events };
+  }); 
 
   // 4) CSS escape for string literal
   const cssEsc = style.replace(/`/g, "\\`");
@@ -216,7 +215,7 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
         this._created = true;
       }
 
-      this._recompute(${[...stateKeySet].join(', ')});
+      this._recompute([${[...stateKeySet].map(k => `'${k}'`).join(', ')}]);
 
       // initial paint
       this.updateAll();
@@ -242,6 +241,7 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
         if (this.hasAttribute(attr)) this.removeAttribute(attr);
         return;
       }
+      if (typeof v === 'object') return;
       const sv = v === true ? '' : String(v);
       if (this.getAttribute(attr) !== sv) this.setAttribute(attr, sv);
     }
@@ -261,11 +261,12 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
       const dom = tpl.content;
 
       // Replace each <sws-bind data-key="x"> with a Text node and remember it (base only)
+      this._textBindings = []; // store { expr, node }
       dom.querySelectorAll('sws-bind').forEach((el) => {
-        const key = el.getAttribute('data-key');
-        const tn = document.createTextNode(this.state[key] ?? '');
+        const expr = el.getAttribute('data-expr');
+        const tn = document.createTextNode(this._evalExpr(expr, this.state, null) ?? '');
         el.replaceWith(tn);
-        this._textBindings.push({ key, node: tn });
+        this._textBindings.push({ expr, node: tn });
       });
 
       // Attach event listeners ONCE (base)
@@ -308,9 +309,9 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
     updateAll(){
       // 1) base text nodes
       for (const b of this._textBindings) {
-        const v = this.state[b.key];
-        const nv = (v === null || v === undefined) ? '' : String(v);
-        if (b.node.nodeValue !== nv) b.node.nodeValue = nv;
+        const nv = this._evalExpr(b.expr, this.state, null);
+        const sv = nv == null ? '' : String(nv);
+        if (b.node.nodeValue !== sv) b.node.nodeValue = sv;
       }
 
       // 2) IF blocks
@@ -365,6 +366,45 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
   return dirty;
 }
 
+_evalExpr(expr, state, scope){
+  try {
+    // Build param names/values from state
+    var names = [];
+    var vals  = [];
+    for (var k in state) {
+      if (Object.prototype.hasOwnProperty.call(state, k)) {
+        names.push(k);
+        vals.push(state[k]);
+      }
+    }
+
+    // Overlay scope locals (shadow state if same name)
+    if (scope) {
+      for (var s in scope) {
+        if (Object.prototype.hasOwnProperty.call(scope, s)) {
+          var idx = names.indexOf(s);
+          if (idx >= 0) {
+            vals[idx] = scope[s];   // shadow existing
+          } else {
+            names.push(s);
+            vals.push(scope[s]);
+          }
+        }
+      }
+    }
+
+    // Build function: new Function('count','doubled','label','g','i', 'return ( expr );')
+    var src = 'return ( ' + expr + ' );';
+    var fn  = Function.apply(null, names.concat(src));
+    return fn.apply(this, vals);
+  } catch (_e) {
+    return '';
+  }
+}
+
+
+
+
 _renderEach(meta) {
     const rt = this._eachRuntime.get(meta.id);
     if (!rt) return;
@@ -404,6 +444,7 @@ _renderEach(meta) {
     }
   }
 
+  
 
     _mountIfBranch(ifId, branchKey){
   const meta = this.__ifs.find(x => x.id === ifId);
@@ -411,36 +452,34 @@ _renderEach(meta) {
   const rt = this._ifRuntime.get(ifId);
   if (!rt) return;
 
-  // locate branch by key
   let branch = meta.branches.find(b => b.key === branchKey);
   if (!branch && branchKey === 'else') branch = meta.elseBranch || null;
   if (!branch) return;
 
-  // Build fragment for this branch
   const tpl = document.createElement('template');
   tpl.innerHTML = branch.html;
   const frag = tpl.content;
 
-  // text binds scoped to this branch
+  // collect ONLY branch-local bindings; do not clear global list
   const locals = [];
   frag.querySelectorAll('sws-bind').forEach((el) => {
-    const key = el.getAttribute('data-key');
-    const tn = document.createTextNode(this.state[key] ?? '');
+    const expr = el.getAttribute('data-expr');
+    const tn = document.createTextNode(this._evalExpr(expr, this.state, null) ?? '');
     el.replaceWith(tn);
-    locals.push({ key, node: tn });
-    this._textBindings.push({ key, node: tn }); // track globally for updates
+    const rec = { expr, node: tn };
+    locals.push(rec);
+    this._textBindings.push(rec); // include in global updates
   });
 
+  // (branch events already compiled into branch.html via prepass)
   ${__BRANCH_WIRING__}
 
-  // mount before anchor
   const nodes = Array.from(frag.childNodes);
-  rt.anchor.parentNode && rt.anchor.parentNode.insertBefore(frag, rt.anchor);
+  if (rt.anchor.parentNode) rt.anchor.parentNode.insertBefore(frag, rt.anchor);
 
-  // record
   rt.currentKey = branchKey;
   rt.nodes = nodes;
-  rt.localTextBindings = locals;
+  rt.localTextBindings = locals; // so _unmountIf can remove them later
 }
 
 
@@ -808,4 +847,12 @@ function compileEachInlineEventWiring(
         }`;
     }).join('\n');
   }).join('\n');
+}
+
+
+function interpolateExpr(html: string): string {
+  return html.replace(
+    /\{(?!#if|#each|:else|\/if|\/each)([^}]+)\}/g,
+    (_m, expr) => `<sws-bind data-expr="${expr.trim()}"></sws-bind>`
+  );
 }

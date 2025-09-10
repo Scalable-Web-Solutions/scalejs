@@ -1,14 +1,15 @@
 <script>
   export let count = 0;
+
   $: doubled = count*100;
   $: label = `${doubled} clicks`;
   function inc(){ count += 1; }
 
-  let goat = [
+  export let goat = [
     { name: 'goat1', age: 1 },
     { name: 'goat2', age: 2 },
     { name: 'goat3', age: 3 },
-  ]
+  ];
 </script>
 
 <button @click="inc()" class="">{label}</button>

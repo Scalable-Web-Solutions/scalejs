@@ -1,4 +1,5 @@
-import type { Prop } from "./parser.js";
+
+import { Prop } from "./types.js";
 
 type Mode = "wc" | "liquid";
 

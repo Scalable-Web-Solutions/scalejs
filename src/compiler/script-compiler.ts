@@ -7,10 +7,10 @@ export type ScriptCompileOptions = {
 };
 
 export type ScriptCompileResult = {
-  methodsCode: string;     // class methods to inject
-  topLevelCode: string;    // optional ctor-time code (empty for now)
-  methodNames: string[];   // detected method names
-  modulePreamble: string;  // import lines if allowImports=true, else ""
+  methodsCode: string;
+  topLevelCode: string;
+  methodNames: string[];
+  modulePreamble: string;
 };
 
 function createMethodCompat(
@@ -42,9 +42,31 @@ export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOption
   const topLevelStmts: ts.Statement[] = [];
   const methodDecls: Array<{ name: string; node: ts.Node; params?: ts.NodeArray<ts.ParameterDeclaration>; body?: ts.Block }> = [];
 
+  const foundProps: Array<{ name: string; defaultVal?: string }> = [];
+  const foundDerived: Array<{ name: string; expr: string; deps: string[] }> = [];
+
+  function hasExportModifier(n: ts.Node) {
+  // @ts-ignore
+  const mods = n.modifiers as ts.NodeArray<ts.ModifierLike> | undefined;
+  return !!mods?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
+  }
+  const p = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
   // --- 1) Collect top-level declarations ---
   for (const stmt of source.statements) {
     // strip `export` modifier if present
+
+    if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
+    for (const d of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(d.name)) {
+        const name = d.name.text;
+        const defaultVal = d.initializer
+          ? p.printNode(ts.EmitHint.Unspecified, d.initializer, source)
+          : undefined;
+        foundProps.push({ name, defaultVal });
+      }
+    }
+  }
+
     const stripped = stripExport(stmt);
 
     // imports
@@ -151,55 +173,94 @@ export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOption
           : null;
       };
 
-      const visit: ts.Visitor = (node) => {
-        // Assignment Expression
-        if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
-          if (ts.isIdentifier(node.left)) {
-            const name = node.left.text;
-            if (props.has(name) && !scopeLocals.has(name)) {
-              const left = F.createPropertyAccessExpression(F.createThis(), name);
-              if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-                return F.updateBinaryExpression(node, left, node.operatorToken, ts.visitNode(node.right, visit) as ts.Expression);
-              } else {
-                // compound: x += y  -> this.x = this.x + (y)
-                const op = compoundToBinary(node.operatorToken.kind);
-                return F.createBinaryExpression(
-                  left,
-                  F.createToken(ts.SyntaxKind.EqualsToken),
-                  F.createBinaryExpression(left, F.createToken(op), ts.visitNode(node.right, visit) as ts.Expression)
-                );
-              }
-            }
-          } else if (ts.isArrayLiteralExpression(node.left) || ts.isObjectLiteralExpression(node.left)) {
-            // Skip literal LHS
-          } else if (ts.isArrayBindingPattern(node.left) || ts.isObjectBindingPattern(node.left)) {
-            const expanded = expandDestructuringAssign(node.left, ts.visitNode(node.right, visit) as ts.Expression);
-            if (expanded) return expanded;
-          }
-        }
+function shouldRewriteIdentifier(id: ts.Identifier, parent?: ts.Node): boolean {
+  if (!parent) return true;
 
-        // ++x / x++ / --x / x--
-        if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) {
-          const op = ts.isPrefixUnaryExpression(node) ? node.operator : node.operator;
-          const operand = ts.isPrefixUnaryExpression(node) ? node.operand : node.operand;
-          if ((op === ts.SyntaxKind.PlusPlusToken || op === ts.SyntaxKind.MinusMinusToken) && ts.isIdentifier(operand)) {
-            const name = operand.text;
-            if (props.has(name) && !scopeLocals.has(name)) {
-              const left = F.createPropertyAccessExpression(F.createThis(), name);
-              const one = F.createNumericLiteral(1);
-              const mathOp = op === ts.SyntaxKind.PlusPlusToken ? ts.SyntaxKind.PlusToken : ts.SyntaxKind.MinusToken;
-              // desugar to (this.x = this.x ± 1)
-              return F.createBinaryExpression(
-                left,
-                F.createToken(ts.SyntaxKind.EqualsToken),
-                F.createBinaryExpression(left, F.createToken(mathOp), one)
-              );
-            }
-          }
-        }
+  // don’t rewrite declaration names
+  if (ts.isVariableDeclaration(parent) && parent.name === id) return false;
+  if (ts.isParameter(parent) && parent.name === id) return false;
+  if (ts.isFunctionDeclaration(parent) && parent.name === id) return false;
 
-        return ts.visitEachChild(node, visit, ctx);
-      };
+  // don’t rewrite property names / shorthand props
+  if (ts.isPropertyAccessExpression(parent) && parent.name === id) return false;
+  if (ts.isPropertyAssignment(parent) && parent.name === id) return false;
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === id) return false;
+
+  // don’t rewrite labels, import/export names, etc. (add as you hit cases)
+
+  return true;
+}
+
+const visit: ts.Visitor = (node) => {
+  // 1) READ rewrite: bare Identifier → this.<prop>
+  if (ts.isIdentifier(node)) {
+    const name = node.text;
+    if (props.has(name) && !scopeLocals.has(name) && shouldRewriteIdentifier(node, node.parent)) {
+      return F.createPropertyAccessExpression(F.createThis(), name);
+    }
+  }
+
+  // 2) Assignment expressions
+  if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
+    if (ts.isIdentifier(node.left)) {
+      const name = node.left.text;
+      if (props.has(name) && !scopeLocals.has(name)) {
+        const left = F.createPropertyAccessExpression(F.createThis(), name);
+
+        if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+          // x = rhs  ->  this.x = (rewritten rhs)
+          return F.updateBinaryExpression(
+            node,
+            left,
+            node.operatorToken,
+            ts.visitNode(node.right, visit) as ts.Expression
+          );
+        } else {
+          // x += y -> this.x = this.x + (rewritten y)   (and similar for other compounds)
+          const op = compoundToBinary(node.operatorToken.kind);
+          return F.createBinaryExpression(
+            left,
+            F.createToken(ts.SyntaxKind.EqualsToken),
+            F.createBinaryExpression(
+              left,
+              F.createToken(op),
+              ts.visitNode(node.right, visit) as ts.Expression
+            )
+          );
+        }
+      }
+    } else if (ts.isArrayBindingPattern(node.left) || ts.isObjectBindingPattern(node.left)) {
+      const expanded = expandDestructuringAssign(
+        node.left,
+        ts.visitNode(node.right, visit) as ts.Expression
+      );
+      if (expanded) return expanded;
+    }
+  }
+
+  // 3) ++x / x++ / --x / x--
+  if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) {
+    const op = ts.isPrefixUnaryExpression(node) ? node.operator : node.operator;
+    const operand = ts.isPrefixUnaryExpression(node) ? node.operand : node.operand;
+    if ((op === ts.SyntaxKind.PlusPlusToken || op === ts.SyntaxKind.MinusMinusToken) && ts.isIdentifier(operand)) {
+      const name = operand.text;
+      if (props.has(name) && !scopeLocals.has(name)) {
+        const left = F.createPropertyAccessExpression(F.createThis(), name);
+        const one  = F.createNumericLiteral(1);
+        const mathOp = op === ts.SyntaxKind.PlusPlusToken ? ts.SyntaxKind.PlusToken : ts.SyntaxKind.MinusToken;
+        // desugar to: this.x = this.x ± 1
+        return F.createBinaryExpression(
+          left,
+          F.createToken(ts.SyntaxKind.EqualsToken),
+          F.createBinaryExpression(left, F.createToken(mathOp), one)
+        );
+      }
+    }
+  }
+
+  return ts.visitEachChild(node, visit, ctx);
+};
+
 
       return (node): ts.Node => {
         const result = ts.visitNode(node, visit);
@@ -207,6 +268,7 @@ export function compileScriptToClass(scriptSrc: string, opt: ScriptCompileOption
       };
     };
   }
+
 
   // Scope helpers
   function collectLocals(node: ts.Node): Set<string> {
