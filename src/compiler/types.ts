@@ -77,3 +77,9 @@ export interface EachMeta {
   params: string[]; // [listExpr, itemName, idxName?]
   items: string;    // inner HTML containing <sws-bind …>
 }
+
+export type TemplateIR = {
+  html: string;          // fully rendered HTML with <sws-bind> placeholders
+  ifBlocks: IfMeta[];    // from astToHtmlAndMeta
+  eachBlocks: EachMeta[];// from astToHtmlAndMeta
+};

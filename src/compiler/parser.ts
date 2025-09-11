@@ -1,6 +1,7 @@
 import * as types from "./types.js";
 import { tokenize } from './lexer.js';
 import { Derived, Prop } from "./types.js";
+import { astToHtmlAndMeta } from "./ast.js";
 
 export function parseTemplate(src: string): types.ASTNode[] {
   const tks = tokenize(src);
@@ -143,20 +144,20 @@ export function parseScale(fileSrc: string): {
   script: string;
   style: string;
   template: string;      // keep raw template string for Tailwind + current generator
+  templateAst: types.ASTNode[];
+  templateIR: types.TemplateIR; // (optional) expose your parsed AST so you can migrate codegen later
   props: Prop[];
   derived: Derived[];
   // (optional) expose your parsed AST so you can migrate codegen later
-  templateAst?: unknown;
 } {
   const { script, style, template } = splitBlocks(fileSrc);
 
-  // 1) Use your new parser on the *template* (for future codegen)
   const templateAst = parseTemplate(template);
+  const templateIR  = astToHtmlAndMeta(templateAst);
 
-  // 2) Quick script scan to recover props/derived (works with your script-compiler)
   const { props, derived } = analyzeScript(script);
 
-  return { script, style, template, props, derived, templateAst };
+  return { script, style, template, templateAst, templateIR, props, derived };
 }
 
 // Very small, robust-ish splitter for <script>, <style>, <template>

@@ -1,5 +1,5 @@
 import { compileScriptToClass } from "./script-compiler.js";
-import { Derived, Prop } from "./types.js";
+import { ASTNode, Derived, Prop, TemplateIR } from "./types.js";
 
 /**
  * Node-based codegen v1 + IF blocks:
@@ -8,29 +8,24 @@ import { Derived, Prop } from "./types.js";
  * - {#if}{:else if}{:else}{/if} compiled to <sws-if data-id="..."/> anchors,
  *   with per-branch fragments mounted/unmounted on updates.
  */
+
 export function generateIIFE(opts: {
   tag: string;
   script: string;
   style: string;
-  template: string;
+  template: TemplateIR;
   props: Prop[];
   derived: Derived[];
 }) {
   const { tag, script, style, template, props, derived } = opts;
 
-  const raw = template;
-
-  const cond = transformConditionals(raw);
-  const each = transformEachLoops(cond.html);
-
-  // 0) TEXT bindings: turn {expr} into <sws-bind data-expr="expr">
-  const interpolatedBase = interpolateExpr(each.html)
+  const { html, ifBlocks, eachBlocks } = template;
 
   // 2) Event pre-pass for base HTML
-  const baseEvt = prepassEvents(interpolatedBase);
+  const baseEvt = prepassEvents(template.html);
 
   // 3) Event pre-pass per IF branch (and keep the *html* with the same IDs!)
-  const branchPrepass = cond.blocks.map(b => {
+  const branchPrepass = template.ifBlocks.map(b => {
   const map: Record<string, { html: string; events: BranchEvent[] }> = {};
   for (const br of b.branches) {
     const ih = interpolateExpr(br.html);
@@ -44,7 +39,7 @@ export function generateIIFE(opts: {
 });
 
   // Prepass Each
-  const eachPrepass = each.block.map(b => {
+  const eachPrepass = template.eachBlocks.map(b => {
   const ih = interpolateExpr(b.items);
   const pre = prepassEvents(ih);
   return { id: b.id, params: b.params, html: pre.html, events: pre.events };
@@ -94,8 +89,8 @@ export function generateIIFE(opts: {
   const exportedPropNames = props.map(p => p.name);
   const scriptOut = compileScriptToClass(opts.script || "", {exportedPropNames, allowImports: false});
 
-  const __BRANCH_WIRING__ = compileBranchEventWiring(cond.blocks, branchPrepass, exportedPropNames, scriptOut.methodNames);
-  const __EACH_WIRING_INLINE__ = compileEachInlineEventWiring(each.block, eachPrepass, exportedPropNames, scriptOut.methodNames);
+  const __BRANCH_WIRING__ = compileBranchEventWiring(template.ifBlocks, branchPrepass, exportedPropNames, scriptOut.methodNames);
+  const __EACH_WIRING_INLINE__ = compileEachInlineEventWiring(template.eachBlocks, eachPrepass, exportedPropNames, scriptOut.methodNames);
 
   const clsName = toClass(tag);
 
@@ -153,10 +148,10 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
   const order = topologicalOrder(derived);
 
   // serialize IF meta for runtime
-  const ifTable = serializeIfTableWithPrepass(cond.blocks, branchPrepass);
+  const ifTable = serializeIfTableWithPrepass(template.ifBlocks, branchPrepass);
 
   // serialize EACH meta for runtime
-  const eachTable = serializeEachTable(each.block, eachPrepass);
+  const eachTable = serializeEachTable(template.eachBlocks, eachPrepass);
 
   return `(function(){
   class ${clsName} extends HTMLElement {
