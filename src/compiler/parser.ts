@@ -1,229 +1,197 @@
-import * as types from "./types.js";
-import { tokenize } from './lexer.js';
-import { Derived, Prop } from "./types.js";
-import { astToHtmlAndMeta } from "./ast.js";
+// parser.ts
+import * as types from "./types.js"; // must export TokKind, Token, AST node types (see notes below)
+import { tokenize } from "./lexer.js"; // your brace-mode lexer
 
-export function parseTemplate(src: string): types.ASTNode[] {
-  const tks = tokenize(src);
-  let i = 0;
+// ---------- Parser implementation ----------
+class Parser {
+  private tks: types.Token[];
+  private i = 0;
 
-  function peek(k=0): types.Token|undefined { return tks[i+k]; }
-  function eat(kind?: types.TokKind): types.Token {
-    const tk = tks[i++];
-    if (kind && (!tk || tk.kind !== kind)) throw new Error('Expected ' + kind);
+  constructor(tks: types.Token[]) {
+    this.tks = tks;
+  }
+
+  private peek(k = 0): types.Token | undefined { return this.tks[this.i + k]; }
+  private at(kind: types.TokKind) { return this.peek()?.kind === kind; }
+
+  private eat(kind?: types.TokKind): types.Token {
+    const tk = this.tks[this.i++];
+    if (kind && (!tk || tk.kind !== kind)) {
+      const where = tk ?? this.peek() ?? ({ line: -1, col: -1 } as any);
+      throw new Error(`Expected ${kind} @ line ${where.line} col ${where.col}`);
+    }
     return tk!;
   }
 
-  function at(kind: types.TokKind) { return peek()?.kind === kind; }
+  // whitespace TEXT = TEXT that's empty or all spaces/newlines
+  private isWsText(t?: types.Token) {
+    return t?.kind === "TEXT" && (!t.value || /^\s*$/.test(t.value));
+  }
+  private skipWsText() {
+    while (this.isWsText(this.peek())) this.i++;
+  }
 
-  function parseNodes(stop?: () => boolean): types.ASTNode[] {
+  // After a '{', look past optional ws TEXT to see next token kind
+  private lookInBrace(): types.TokKind | undefined {
+    let j = this.i + 1; // current should be LBRACE
+    while (this.isWsText(this.tks[j])) j++;
+    return this.tks[j]?.kind;
+  }
+
+  // Read "{ ... }" where "..." is a free-form expression/head.
+  // Preserves spacing by joining pieces, normalizing to single spaces, trimming.
+  private readUntilRBrace(): string {
+    this.eat("LBRACE");
+    this.skipWsText();
+    const parts: string[] = [];
+    while (!this.at("RBRACE")) {
+      const t = this.eat();
+      parts.push(t.value ?? "");
+    }
+    this.eat("RBRACE");
+    return parts.join("").replace(/\s+/g, " ").trim();
+  }
+
+  // Same, but assumes caller already consumed the tag token (e.g. HASH_EACH),
+  // and we just need to read raw text until the closing "}".
+  private readUntilCloseBraceRaw(): string {
+    const parts: string[] = [];
+    while (!this.at("RBRACE")) {
+      const t = this.eat();
+      if (this.isWsText(t)) { parts.push(" "); continue; }
+      parts.push(t.value ?? "");
+    }
+    this.eat("RBRACE");
+    return parts.join("").replace(/\s+/g, " ").trim();
+  }
+
+  // Tolerant close: "{ /each }" with possible spaces around
+  private eatClose(tag: "END_IF" | "END_EACH") {
+    this.eat("LBRACE");
+    this.skipWsText();
+    this.eat(tag);
+    this.skipWsText();
+    this.eat("RBRACE");
+  }
+
+  private nextIs(tag: "/if" | "/each" | ":else" | ":else if"): boolean {
+    if (this.peek()?.kind !== "LBRACE") return false;
+    let j = this.i + 1;
+    while (this.isWsText(this.tks[j])) j++;
+    const k = this.tks[j]?.kind;
+    if (tag === "/if") return k === "END_IF";
+    if (tag === "/each") return k === "END_EACH";
+    if (tag === ":else") return k === "ELSE";
+    if (tag === ":else if") return k === "ELSE_IF";
+    return false;
+  }
+  private nextIsAny(...tags: Array<"/if" | "/each" | ":else" | ":else if">): boolean {
+    return tags.some(t => this.nextIs(t));
+  }
+
+  // Public entry
+  parseTemplate(): types.ASTNode[] {
+    return this.parseNodes(() => false);
+  }
+
+  // Generic node loop; stop() is used to end a block at matching close/else
+  private parseNodes(stop: () => boolean): types.ASTNode[] {
     const out: types.ASTNode[] = [];
-    let buf = '';
+    let buf = "";
 
-    const flushText = () => { if (buf) { out.push({ kind:'Text', value: buf }); buf = ''; } };
+    const flushText = () => {
+      if (buf) { out.push({ kind: "Text", value: buf } as types.ASTNode); buf = ""; }
+    };
 
-    while (i < tks.length && !(stop && stop())) {
-      const tk = peek();
+    while (this.i < this.tks.length && !stop()) {
+      const tk = this.peek();
       if (!tk) break;
 
-      // Control blocks start with '{' followed by HASH_IF / HASH_EACH / etc.
-      if (tk.kind === 'LBRACE') {
-        // lookahead
-        const tk1 = tks[i+1];
-        if (tk1?.kind === 'HASH_IF') { flushText(); out.push(parseIf()); continue; }
-        if (tk1?.kind === 'HASH_EACH') { flushText(); out.push(parseEach()); continue; }
-        if (tk1?.kind === 'END_IF' || tk1?.kind === 'END_EACH' || tk1?.kind === 'ELSE' || tk1?.kind === 'ELSE_IF') {
-          // let upper level handle the close/else
+      if (tk.kind === "LBRACE") {
+        const nextKind = this.lookInBrace();
+
+        if (nextKind === "HASH_IF")   { flushText(); out.push(this.parseIf());   continue; }
+        if (nextKind === "HASH_EACH") { flushText(); out.push(this.parseEach()); continue; }
+
+        // Let the caller's stop() handle END_* / ELSE* tokens
+        if (nextKind === "END_IF" || nextKind === "END_EACH" || nextKind === "ELSE" || nextKind === "ELSE_IF") {
           break;
         }
-        // Otherwise a mustache expression: { <expr> }
+
+        // Mustache fallback
         flushText();
-        out.push(parseMustache());
+        out.push(this.parseMustache());
         continue;
       }
 
-      // Very light element parse: treat everything outside braces as TEXT except we can expand later.
-      // For MVP, let HTML remain TEXT and rely on post-pass to pull attributes/events.
-      buf += tk.value || '';
-      i++;
+      if (tk.kind === "TEXT") { buf += tk.value ?? ""; this.i++; continue; }
+
+      // Any other stray token outside braces → treat as text
+      buf += tk.value ?? ""; this.i++;
     }
+
     flushText();
     return out;
   }
 
-  function readUntilRBraceAsExpr(): string {
-    // consume LBRACE
-    eat('LBRACE');
-    // collect raw tokens until RBRACE
-    let expr = '';
-    while (i < tks.length && !at('RBRACE')) {
-      expr += (eat().value || '');
-    }
-    eat('RBRACE');
-    return expr.trim();
+  private parseMustache(): types.MustacheNode {
+    const expr = this.readUntilRBrace();
+    return { kind: "Mustache", expr };
   }
 
-  function parseMustache(): types.MustacheNode {
-    const expr = readUntilRBraceAsExpr();
-    return { kind: 'Mustache', expr };
-  }
+  private parseIf(): types.IfBlockNode {
+    // "{#if cond}"
+    this.eat("LBRACE"); this.skipWsText(); this.eat("HASH_IF");
+    const cond = this.readUntilCloseBraceRaw();
 
-  function parseIf(): types.IfBlockNode {
-    eat('LBRACE'); eat('HASH_IF'); // "{#if"
-    const cond = readUntilCloseBraceRaw(); // read until "}"
-    const firstChildren = parseNodes(() => nextIsAnyOf('/if', ':else', ':else if'));
+    const firstChildren = this.parseNodes(() => this.nextIsAny("/if", ":else", ":else if"));
+    const branches: Array<{ expr: string; children: types.ASTNode[] }> = [
+      { expr: cond, children: firstChildren }
+    ];
 
-    let branches = [{ expr: cond.trim(), children: firstChildren }];
     let elseChildren: types.ASTNode[] | undefined;
 
-    while (true) {
-      if (nextIs(':else if')) {
-        eat('LBRACE'); eat('ELSE_IF');
-        const e = readUntilCloseBraceRaw();
-        const kids = parseNodes(() => nextIsAnyOf('/if', ':else', ':else if'));
-        branches.push({ expr: e.trim(), children: kids });
-        continue;
-      }
-      if (nextIs(':else')) {
-        eat('LBRACE'); eat('ELSE');
-        eat('RBRACE'); // consume "}"
-        elseChildren = parseNodes(() => nextIs('/if'));
-        continue;
-      }
-      break;
+    // {:else if ...}
+    while (this.nextIs(":else if")) {
+      this.eat("LBRACE"); this.skipWsText(); this.eat("ELSE_IF");
+      const e = this.readUntilCloseBraceRaw();
+      const kids = this.parseNodes(() => this.nextIsAny("/if", ":else", ":else if"));
+      branches.push({ expr: e, children: kids });
     }
 
-    // close {/if}
-    eat('LBRACE'); eat('END_IF'); eat('RBRACE');
+    // {:else}
+    if (this.nextIs(":else")) {
+      this.eat("LBRACE"); this.skipWsText(); this.eat("ELSE"); this.eat("RBRACE");
+      elseChildren = this.parseNodes(() => this.nextIs("/if"));
+    }
 
-    return { kind: 'IfBlock', branches, elseChildren };
+    // {/if}
+    this.eatClose("END_IF");
+
+    return { kind: "IfBlock", branches, elseChildren } as types.IfBlockNode;
   }
 
-  function parseEach(): types.EachBlockNode {
-    eat('LBRACE'); eat('HASH_EACH'); // "{#each"
-    const head = readUntilCloseBraceRaw(); // e.g. "goats as g, i"
+  private parseEach(): types.EachBlockNode {
+    // "{#each head}"
+    this.eat("LBRACE"); this.skipWsText(); this.eat("HASH_EACH");
+    const head = this.readUntilCloseBraceRaw(); // e.g. "list as item, i"
+
     const m = head.match(/^(.*?)\s+as\s+([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?$/);
     const listExpr = (m ? m[1] : head).trim();
-    const itemName = (m ? m[2] : 'item').trim();
+    const itemName = (m ? m[2] : "item").trim();
     const indexName = m?.[3]?.trim();
 
-    const children = parseNodes(() => nextIs('/each'));
+    const children = this.parseNodes(() => this.nextIs("/each"));
 
-    // close {/each}
-    eat('LBRACE'); eat('END_EACH'); eat('RBRACE');
+    this.eatClose("END_EACH");
 
-    return { kind: 'EachBlock', listExpr, itemName, indexName, children };
+    return { kind: "EachBlock", listExpr, itemName, indexName, children } as types.EachBlockNode;
   }
-
-  function nextIs(s: '/if' | '/each' | ':else' | ':else if'): boolean {
-    const a = tks[i], b = tks[i+1];
-    if (!a || !b) return false;
-    if (a.kind !== 'LBRACE') return false;
-    if (s === '/if')      return b.kind === 'END_IF';
-    if (s === '/each')    return b.kind === 'END_EACH';
-    if (s === ':else')    return b.kind === 'ELSE';
-    if (s === ':else if') return b.kind === 'ELSE_IF';
-    return false;
-  }
-  function nextIsAnyOf(...xs: Array<'/if'|':else'|':else if'|'/each'>): boolean {
-    return xs.some(nextIs);
-  }
-
-  function readUntilCloseBraceRaw(): string {
-    // assumes we just consumed tag keyword; read tokens until RBRACE
-    let txt = '';
-    while (i < tks.length && !at('RBRACE')) txt += (eat().value || '');
-    eat('RBRACE');
-    return txt;
-  }
-
-  return parseNodes();
 }
 
-export function parseScale(fileSrc: string): {
-  script: string;
-  style: string;
-  template: string;      // keep raw template string for Tailwind + current generator
-  templateAst: types.ASTNode[];
-  templateIR: types.TemplateIR; // (optional) expose your parsed AST so you can migrate codegen later
-  props: Prop[];
-  derived: Derived[];
-  // (optional) expose your parsed AST so you can migrate codegen later
-} {
-  const { script, style, template } = splitBlocks(fileSrc);
-
-  const templateAst = parseTemplate(template);
-  const templateIR  = astToHtmlAndMeta(templateAst);
-
-  const { props, derived } = analyzeScript(script);
-
-  return { script, style, template, templateAst, templateIR, props, derived };
-}
-
-// Very small, robust-ish splitter for <script>, <style>, <template>
-function splitBlocks(src: string) {
-  const grab = (tag: "script" | "style" | "template") => {
-    const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
-    const m = src.match(re);
-    return m ? { full: m[0], inner: m[1].trim() } : null;
-  };
-
-  const script = grab("script");
-  const style  = grab("style");
-  const tmpl   = grab("template");
-
-  let template: string;
-  if (tmpl) {
-    template = tmpl.inner;
-  } else {
-    // No <template> section → treat everything outside <script>/<style> as template
-    let rest = src;
-    if (script) rest = rest.replace(script.full, "");
-    if (style)  rest = rest.replace(style.full, "");
-    template = rest.trim();
-  }
-
-  return {
-    script:   script?.inner ?? "",
-    style:    style?.inner ?? "",
-    template,
-  };
-}
-
-
-// Heuristic script analyzer until you fully swap to AST-driven compile.
-function analyzeScript(scriptSrc: string): { props: Prop[]; derived: Derived[] } {
-  const props: Prop[] = [];
-  const derived: Derived[] = [];
-
-  // export let foo = 123;   // prop with default
-  // export let foo;         // prop without default
-  const propRe = /export\s+let\s+([A-Za-z_]\w*)(?:\s*=\s*([^;]+))?;/g;
-  let m: RegExpExecArray | null;
-  while ((m = propRe.exec(scriptSrc))) {
-    const name = m[1];
-    const rawDefault = m[2]?.trim();
-    // keep as JS snippet string; your generator already handles defaults
-    props.push({ name, defaultVal: rawDefault });
-  }
-
-  // $: foo = bar + baz;          // named derived
-  // $: label = `${count} clicks` // template expr
-  // $: doSideEffect();           // ignore (no assignment)
-  const reactiveRe = /^\s*\$:\s*([^=\n]+?)\s*=\s*([^;]+);?/gm;
-  while ((m = reactiveRe.exec(scriptSrc))) {
-    const name = m[1].trim();
-    const expr = m[2].trim();
-
-    // collect crude dependencies: identifiers used in expr
-    const deps = Array.from(new Set(
-      (expr.match(/[A-Za-z_]\w*/g) || [])
-    )).filter(id =>
-      id !== "true" && id !== "false" && id !== "null" && id !== "undefined"
-    );
-
-    derived.push({ name, expr, deps });
-  }
-
-  return { props, derived };
+// ---------- Public API ----------
+export function parseTemplate(src: string): types.ASTNode[] {
+  const tokens = tokenize(src);
+  const p = new Parser(tokens);
+  return p.parseTemplate();
 }

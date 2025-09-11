@@ -13,19 +13,19 @@ export function generateIIFE(opts: {
   tag: string;
   script: string;
   style: string;
-  template: TemplateIR;
+  templateIR: TemplateIR;
   props: Prop[];
   derived: Derived[];
 }) {
-  const { tag, script, style, template, props, derived } = opts;
+  const { tag, script, style, templateIR, props, derived } = opts;
 
-  const { html, ifBlocks, eachBlocks } = template;
+  const { html, ifBlocks, eachBlocks } = templateIR;
 
   // 2) Event pre-pass for base HTML
-  const baseEvt = prepassEvents(template.html);
+  const baseEvt = prepassEvents(templateIR.html);
 
   // 3) Event pre-pass per IF branch (and keep the *html* with the same IDs!)
-  const branchPrepass = template.ifBlocks.map(b => {
+  const branchPrepass = templateIR.ifBlocks.map(b => {
   const map: Record<string, { html: string; events: BranchEvent[] }> = {};
   for (const br of b.branches) {
     const ih = interpolateExpr(br.html);
@@ -39,7 +39,7 @@ export function generateIIFE(opts: {
 });
 
   // Prepass Each
-  const eachPrepass = template.eachBlocks.map(b => {
+  const eachPrepass = templateIR.eachBlocks.map(b => {
   const ih = interpolateExpr(b.items);
   const pre = prepassEvents(ih);
   return { id: b.id, params: b.params, html: pre.html, events: pre.events };
@@ -89,8 +89,8 @@ export function generateIIFE(opts: {
   const exportedPropNames = props.map(p => p.name);
   const scriptOut = compileScriptToClass(opts.script || "", {exportedPropNames, allowImports: false});
 
-  const __BRANCH_WIRING__ = compileBranchEventWiring(template.ifBlocks, branchPrepass, exportedPropNames, scriptOut.methodNames);
-  const __EACH_WIRING_INLINE__ = compileEachInlineEventWiring(template.eachBlocks, eachPrepass, exportedPropNames, scriptOut.methodNames);
+  const __BRANCH_WIRING__ = compileBranchEventWiring(templateIR.ifBlocks, branchPrepass, exportedPropNames, scriptOut.methodNames);
+  const __EACH_WIRING_INLINE__ = compileEachInlineEventWiring(templateIR.eachBlocks, eachPrepass, exportedPropNames, scriptOut.methodNames);
 
   const clsName = toClass(tag);
 
@@ -148,10 +148,10 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
   const order = topologicalOrder(derived);
 
   // serialize IF meta for runtime
-  const ifTable = serializeIfTableWithPrepass(template.ifBlocks, branchPrepass);
+  const ifTable = serializeIfTableWithPrepass(templateIR.ifBlocks, branchPrepass);
 
   // serialize EACH meta for runtime
-  const eachTable = serializeEachTable(template.eachBlocks, eachPrepass);
+  const eachTable = serializeEachTable(templateIR.eachBlocks, eachPrepass);
 
   return `(function(){
   class ${clsName} extends HTMLElement {
@@ -164,6 +164,7 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
       this._updatingFromAttribute = false;
       this.state = {
         ${defaults}
+        ${derived.map(d => `${d.name}: undefined,`).join('\n        ')}
       };
 
       // styles (constructable stylesheet fallback to <style>)
@@ -211,6 +212,11 @@ function topologicalOrder(ds: { name: string; deps: string[] }[]): string[] {
       }
 
       this._recompute([${[...stateKeySet].map(k => `'${k}'`).join(', ')}]);
+
+      if(!this._created){
+        this.create();
+        this._created = true;
+      }
 
       // initial paint
       this.updateAll();

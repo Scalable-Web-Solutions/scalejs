@@ -1,18 +1,25 @@
 <script>
   export let count = 0;
-
-  $: doubled = count*100;
-  $: label = `${doubled} clicks`;
-  function inc(){ count += 1; }
-
   export let goat = [
     { name: 'goat1', age: 1 },
     { name: 'goat2', age: 2 },
     { name: 'goat3', age: 3 },
   ];
+
+  let loggedIn = false;
+
+  function inc(){ count += 1; }
 </script>
 
-<button @click="inc()" class="">{label}</button>
+<button @click="inc()" class="">{count}</button>
+
+<p>test</p>
+
+{#if loggedIn}
+  <p>Welcome, user!</p>
+{:else}
+  <p>Please log in.</p>
+{/if}
 
 {#each goat as g}
   <div>{g.name}</div>

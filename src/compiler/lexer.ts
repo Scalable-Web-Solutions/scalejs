@@ -19,12 +19,15 @@ export function tokenize(inputStream: string): types.Token[] {
         return inputStream.slice(start, pos);
     }
 
+    let inMustache = false;
+
     while(pos < inputStream.length){
         // Getting the current character from the position we are at
         const char = inputStream[pos];
 
         // Starting to handle our tags
         if(char === '{'){
+            inMustache = true;
             // We found it so we push it into our token list
             push('LBRACE', '{');
             // Move position and col
@@ -33,6 +36,7 @@ export function tokenize(inputStream: string): types.Token[] {
             continue;
         }
         if(char === '}'){
+            inMustache = false;
             // We found it so we push it into our token list
             push('RBRACE', '}');
             // Move position and col
@@ -86,7 +90,8 @@ export function tokenize(inputStream: string): types.Token[] {
 
         // Deprecated on:events
 
-        // Next section is iterating and finding our special syntax like #if
+        if(inMustache){
+            // Next section is iterating and finding our special syntax like #if
         if(char === '#' && inputStream.slice(pos, pos+3) === '#if'){
             push('HASH_IF', '#if');
             pos += 3;
@@ -105,10 +110,10 @@ export function tokenize(inputStream: string): types.Token[] {
             // just log it as two seperarate tokens
         }
 
-        if(inputStream.slice(pos, pos+6) === ':else'){
+        if(inputStream.slice(pos, pos+5) === ':else'){
             push('ELSE', ':else');
-            pos += 6;
-            col += 6;
+            pos += 5;
+            col += 5;
             continue;
         }
 
@@ -134,27 +139,38 @@ export function tokenize(inputStream: string): types.Token[] {
             col += 6;
             continue;
         }
+        }
 
         // Holy fuck so many if statements -- Moving on to strings
-        if (char === '"' || char === "'"){
+        if (char === '"' || char === "'") {
             const q = char;
-            const start = pos;
-            pos++;
-            col++;
-            while(pos < inputStream.length && inputStream[pos] !== q){
-                if(inputStream[pos] === '\\'){
-                    pos++;
-                    col++;
-                }
-                if(pos >= inputStream.length){
-                    error('Unterminated string');
-                    break;
-                }
-                pos++;
-                col++;
+            const start = pos;      // if you want raw with quotes
+            pos++; col++;           // consume opening quote
+
+            while (pos < inputStream.length && inputStream[pos] !== q) {
+              if (inputStream[pos] === '\\' && pos + 1 < inputStream.length) {
+                // skip escaped char
+                pos++; col++;
+              }
+              if (inputStream[pos] === '\n') { line++; col = 1; }
+              else { col++; }
+              pos++;
             }
-            const val = inputStream.slice(start, pos);
-            push('STRING', val);
+        
+            if (pos >= inputStream.length) {
+              error('Unterminated string');
+              break;
+            }
+        
+            pos++; col++; // <-- consume closing quote
+        
+            // choose ONE of these two representations:
+        
+            // 1) Raw (including quotes):
+            push('STRING', inputStream.slice(start, pos));
+            // 2) Unquoted:
+            // push('STRING', inputStream.slice(start + 1, pos - 1));
+
             continue;
         }
         // identifier
