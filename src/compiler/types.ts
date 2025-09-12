@@ -47,7 +47,7 @@ export type TokKind =
   | 'HASH_EACH' | 'END_EACH'
   | 'IDENT' | 'STRING' | 'NUMBER' | 'OTHER'
   | 'LT' | 'GT' | 'SLASH' | 'EQUALS'
-  | 'AT' | 'ONCOLON';
+  | 'AT' | 'ONCOLON' | 'COLON' | 'DOT' | 'DASH';
 
 export interface Token {
   kind: TokKind;
@@ -82,4 +82,50 @@ export type TemplateIR = {
   html: string;          // fully rendered HTML with <sws-bind> placeholders
   ifBlocks: IfMeta[];    // from astToHtmlAndMeta
   eachBlocks: EachMeta[];// from astToHtmlAndMeta
+};
+
+export type MountPoint = { parent: Node; anchor?: Node };
+
+export type IRText =
+  | { k: 'staticText'; value: string }
+  | { k: 'text'; expr: string; stateDeps: string[]; localDeps: string[] };
+
+export type IRAttrStatic = { kind: 'static'; name: string; value: string | true };
+export type IRAttrDynamic = { kind: 'dynamic'; name: string; expr: string; stateDeps: string[]; localDeps: string[] };
+export type IRAttr = IRAttrStatic | IRAttrDynamic;
+
+export type IRElem = {
+  k: 'elem';
+  tag: string;
+  attrs: IRAttr[];
+  on: { evt: string; handler: string }[];
+  children: IRNode[];
+};
+
+export type IRIf = {
+  k: 'if';
+  branches: Array<{ expr: string; stateDeps: string[]; localDeps: string[]; node: IRNode }>;
+  elseNode?: IRNode;
+};
+
+export type IREach = {
+  k: 'each';
+  listExpr: string;
+  listStateDeps: string[];
+  listLocalDeps: string[]; // usually []
+  item: string;
+  index?: string;
+  keyExpr?: string;
+  keyStateDeps?: string[];
+  keyLocalDeps?: string[];
+  node: IRNode;
+};
+
+export type IRFragment = { k: 'fragment'; children: IRNode[] };
+
+export type IRNode = IRText | IRElem | IRIf | IREach | IRFragment;
+
+export type RenderModule = {
+  nodes: IRNode[];
+  script?: string;     // raw script content
 };

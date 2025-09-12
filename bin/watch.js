@@ -24,6 +24,11 @@ function build() {
   p.on('close', (code) => console.log(code === 0 ? '✓ rebuilt' : `✖ build failed (${code})`));
 }
 
+function minify() {
+  const p = spawn('node', ['build.mjs'], { stdio: 'inherit', shell: process.platform === 'win32' });
+  p.on('close', (code) => console.log(code === 0 ? '✓ minified' : `✖ minify failed (${code})`));
+}
+
 let t;
 const run = () => { clearTimeout(t); t = setTimeout(build, 80); };
 
@@ -35,3 +40,4 @@ chokidar.watch(input, {
 
 // first build
 build();
+minify();

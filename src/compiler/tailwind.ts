@@ -4,6 +4,13 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
+import { ASTNode } from "./types.js";
+import { astToHtml } from "./astToHtml.js";
+
+/**
+ * Builds tailwindcss classes from an ast
+ * AST -> HTML -> CSS -> IR -> Codegen
+ */
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -21,6 +28,12 @@ const BASE_CSS = `@tailwind base;
 function extractSafelist(template: string): string[] {
   const m = template.match(/<!--\s*tw:safelist\s+([^>]+?)\s*-->/);
   return m ? m[1].split(/\s+/).filter(Boolean) : [];
+}
+
+export async function buildTailwindFromAst(ast: ASTNode[]) {
+  const templateHtml = astToHtml(ast);
+  console.log(templateHtml);
+  return buildTwForTemplate(templateHtml);
 }
 
 export async function buildTwForTemplate(templateHtml: string): Promise<string> {

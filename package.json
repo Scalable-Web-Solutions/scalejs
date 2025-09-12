@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "node bin/watch.js",
-    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag --emit-liquid sections/hero.liquid --section-name 'Hero (ScaleJS)' --mode wc"
+    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag --emit-liquid sections/hero.liquid --section-name 'Hero (ScaleJS)' --mode wc",
+    "minify": "node bin/build.mjs"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,7 @@
   },
   "dependencies": {
     "chokidar": "^4.0.3",
+    "esbuild": "^0.25.9",
     "typescript": "^5.9.2"
   }
 }

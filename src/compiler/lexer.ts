@@ -26,15 +26,77 @@ export function tokenize(inputStream: string): types.Token[] {
         const char = inputStream[pos];
 
         // Starting to handle our tags
-        if(char === '{'){
-            inMustache = true;
-            // We found it so we push it into our token list
-            push('LBRACE', '{');
-            // Move position and col
-            pos++;
-            col++;
+        // put this at the TOP of the main while loop, before other token kinds
+        if (char === '{') {
+            // emit "{"
+            push('LBRACE', '{'); pos++; col++;
+
+            // 1) skip optional whitespace right after "{"
+            while (pos < inputStream.length && /\s/.test(inputStream[pos])) {
+                if (inputStream[pos] === '\n') { line++; col = 1; } else col++;
+                pos++;
+            }
+
+            // 2) control heads (no generic tokenization inside braces!)
+            const rest = inputStream.slice(pos);
+
+  if (rest.startsWith('#if')) {
+        push('HASH_IF', '#if'); pos += 3; col += 3;
+        // let the PARSER read until the matching "}" (do NOT consume it here)
+        continue;
+    }
+    if (rest.startsWith('#each')) {
+        push('HASH_EACH', '#each'); pos += 5; col += 5;
+        // let the PARSER read until the matching "}"
+        continue;
+    }
+
+  // closers / else → NO body; require and emit the trailing "}" right now
+            function emitClosingBrace() {
+                while (pos < inputStream.length && /\s/.test(inputStream[pos])) {
+                    if (inputStream[pos] === '\n') { line++; col = 1; } else col++;
+                        pos++;
+                }
+                if (inputStream[pos] !== '}') throw new Error("Expected '}' after control tag");
+                push('RBRACE', '}'); pos++; col++;
+            }
+
+            if (rest.startsWith(':else if')) {
+                push('ELSE_IF', ':else if'); pos += 8; col += 8;
+                emitClosingBrace();
+                continue;
+            }
+            if (rest.startsWith(':else')) {
+                push('ELSE', ':else'); pos += 5; col += 5;   // length 5, not 6
+                emitClosingBrace();
+                continue;
+            }
+            if (rest.startsWith('/if')) {
+                push('END_IF', '/if'); pos += 3; col += 3;
+                emitClosingBrace();
+                continue;
+            }
+            if (rest.startsWith('/each')) {
+                push('END_EACH', '/each'); pos += 5; col += 5; // length 5, not 6
+                emitClosingBrace();
+                continue;
+            }
+
+  // 3) mustache expression → capture everything up to the next "}" as ONE TEXT
+            const start = pos;
+            while (pos < inputStream.length && inputStream[pos] !== '}') {
+            if (inputStream[pos] === '\n') { line++; col = 1; } else col++;
+                pos++;
+            }
+            const body = inputStream.slice(start, pos);
+            if (body) push('TEXT', body, start);
+
+            if (inputStream[pos] !== '}') throw new Error('Unterminated mustache');
+            push('RBRACE', '}'); pos++; col++;
+
             continue;
         }
+
         if(char === '}'){
             inMustache = false;
             // We found it so we push it into our token list
@@ -90,56 +152,54 @@ export function tokenize(inputStream: string): types.Token[] {
 
         // Deprecated on:events
 
-        if(inMustache){
-            // Next section is iterating and finding our special syntax like #if
-        if(char === '#' && inputStream.slice(pos, pos+3) === '#if'){
-            push('HASH_IF', '#if');
-            pos += 3;
-            col += 3;
-            continue;
-        }
+        // helper: after a control head that has no body, require and emit the closing '}'
+function emitClosingBrace() {
+  // optional whitespace before '}'
+  while (pos < inputStream.length && /\s/.test(inputStream[pos])) {
+    if (inputStream[pos] === '\n') { line++; col = 1; } else col++;
+    pos++;
+  }
+  if (inputStream[pos] !== '}') {
+    throw new Error("Expected '}' after control tag");
+  }
+  // consume and emit the '}'
+  push('RBRACE', '}');
+  pos++; col++;
+  inMustache = false; // we just closed the mustache
+}
 
-        if(inputStream.slice(pos, pos+8) === ':else if'){
-            push('ELSE_IF', ':else if');
-            pos += 8;
-            col += 8;
-            continue;
-        }
-        
-        if(inputStream.slice(pos, pos+6) === ':else}'){
-            // just log it as two seperarate tokens
-        }
+if (inMustache) {
+  // control heads with a body (parser will read until next '}')
+  if (inputStream.slice(pos, pos+3) === '#if') {
+    push('HASH_IF', '#if'); pos += 3; col += 3; continue;
+  }
+  if (inputStream.slice(pos, pos+5) === '#each') {
+    push('HASH_EACH', '#each'); pos += 5; col += 5; continue;
+  }
 
-        if(inputStream.slice(pos, pos+5) === ':else'){
-            push('ELSE', ':else');
-            pos += 5;
-            col += 5;
-            continue;
-        }
+  // control heads with NO body → also emit the trailing '}' NOW
+  if (inputStream.slice(pos, pos+8) === ':else if') {
+    push('ELSE_IF', ':else if'); pos += 8; col += 8;
+    emitClosingBrace();
+    continue;
+  }
+  if (inputStream.slice(pos, pos+5) === ':else') {
+    push('ELSE', ':else'); pos += 5; col += 5;
+    emitClosingBrace();
+    continue;
+  }
+  if (inputStream.slice(pos, pos+3) === '/if') {
+    push('END_IF', '/if'); pos += 3; col += 3;
+    emitClosingBrace();
+    continue;
+  }
+  if (inputStream.slice(pos, pos+5) === '/each') {       // NOTE: 5, not 6
+    push('END_EACH', '/each'); pos += 5; col += 5;
+    emitClosingBrace();
+    continue;
+  }
+}
 
-        if(inputStream.slice(pos, pos+4) === '/if}'){
-            // same note as above
-        }
-
-        if (inputStream.slice(pos, pos+3) === '/if'){
-            push('END_IF', '/if');
-            pos += 3;
-            col += 3;
-            continue;
-        }
-         if (inputStream.slice(pos, pos+5) === '#each'){
-            push('HASH_EACH', '#each');
-            pos += 5;
-            col += 5;
-            continue;
-        }
-         if (inputStream.slice(pos, pos+6) === '/each'){
-            push('END_EACH', '/each');
-            pos += 6;
-            col += 6;
-            continue;
-        }
-        }
 
         // Holy fuck so many if statements -- Moving on to strings
         if (char === '"' || char === "'") {

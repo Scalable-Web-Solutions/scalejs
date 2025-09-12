@@ -6,14 +6,19 @@
     { name: 'goat3', age: 3 },
   ];
 
-  let loggedIn = false;
+  let loggedIn = true;
 
   function inc(){ count += 1; }
+
+  export let propTest = "Hello";
 </script>
 
 <button @click="inc()" class="">{count}</button>
 
-<p>test</p>
+<p class="text-red-500 bg-black">{propTest}</p>
+
+<p>goat count: {goat.length}</p>
+<p>awejn </p>
 
 {#if loggedIn}
   <p>Welcome, user!</p>
