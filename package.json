@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "node bin/watch.js",
-    "compile": "node bin/scalejs.js build examples/hero.scale --out dist/hero.js --tag test-tag --emit-liquid sections/hero.liquid --section-name 'Hero (ScaleJS)' --mode wc",
+    "compile": "node bin/scalejs.js src",
     "minify": "node bin/build.mjs"
   },
   "keywords": [],
@@ -18,7 +18,8 @@
     "@types/node": "^24.3.1",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "fast-glob": "^3.3.3"
   },
   "dependencies": {
     "chokidar": "^4.0.3",

@@ -12,11 +12,11 @@ const input = path.resolve(__dirname, '../examples/hero.scale');
 const args = [
   'build',
   input,
-  '--out', path.resolve(__dirname, '../dist/test.js'),
-  '--tag', 'test-tag',
+  '--out', path.resolve(__dirname, '../dist/navbar.js'),
+  '--tag', 'scale-nav',
   '--emit-liquid', path.resolve(__dirname, '../dist/test.liquid'),
   '--mode', 'wc',
-  '--section-name', 'Test (ScaleJS)',
+  '--section-name', 'ScaleJSNav (ScaleJS)',
 ];
 
 function build() {

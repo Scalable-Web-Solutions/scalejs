@@ -1,32 +1,38 @@
 <script>
-  export let count = 0;
-  export let goat = [
-    { name: 'goat1', age: 1 },
-    { name: 'goat2', age: 2 },
-    { name: 'goat3', age: 3 },
+  export let navItems = [
+    {
+      name: "Home",
+      location: "https://www.littlebudsnatureclub.org/"
+    },
+    {
+      name: "About",
+      location: "https://www.littlebudsnatureclub.org/about"
+    },
+    {
+      name: "Products",
+      location: "/products"
+    },
   ];
-
-  let loggedIn = true;
-
-  function inc(){ count += 1; }
-
-  export let propTest = "Hello";
+  
+  export let cart = 0;
 </script>
 
-<button @click="inc()" class="">{count}</button>
-
-<p class="text-red-500 bg-black">{propTest}</p>
-
-<p>goat count: {goat.length}</p>
-<p>awejn </p>
-
-{#if loggedIn}
-  <p>Welcome, user!</p>
-{:else}
-  <p>Please log in.</p>
-{/if}
-
-{#each goat as g}
-  <div>{g.name}</div>
-  <div>{g.age}</div>
-{/each}
+<section class="nav py-10">
+  <div class="nav-left flex items-center justify-around">
+    <a href="/">
+      <img class="size-12 md:size-24" src="https://static.wixstatic.com/media/a0bbe6_8d089fc9b039445eae3324e5c206fa79~mv2.png/v1/fill/w_190,h_190,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/LittleBudsNatureClub.png" alt="ScaleJS" />
+    </a>
+    <div class="gap-10 flex text-[#0e7d70]">
+      {#each navItems as item}
+      <a href={item.location}>
+        {item.name}
+      </a>
+    {/each}
+    </div>
+    <div>
+      <a href="/cart">
+        Cart ({cart})
+      </a>
+    </div>
+  </div>
+</section>

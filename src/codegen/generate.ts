@@ -64,20 +64,27 @@ ${opts.esm ? 'export ' : ''}function block_root(ctx){
     // compute dirty mask from deps intersecting state keys
     let dirtyMask = 0;
     m.deps.forEach(d => { if (stateKeys.has(d)) dirtyMask |= (bits.get(d) ?? 0); });
+    const mask = dirtyMask; // capture before template string
     return `
   ${m.name}(){
     ${rewritten}
-    this._dirty |= ${dirtyMask};
-    this._schedule();
+    ${mask ? `this._dirty |= ${mask}; this._schedule();` : ``}
   }`;
   }).join('\n');
 
   // 3.9 state initializer: props defaults + derived (undefined) + hoisted vars
-  const statePairs = [
-    ...allProps.map(p => `${p.name}: ${p.defaultVal ?? 'undefined'}`),
-    ...opts.derived.map(d => `${d.name}: undefined`),
-    ...hoisted.vars.map(v => `${v.name}: ${v.init ?? 'undefined'}`),
-  ];
+  const seen = new Set<string>();
+  const statePairs: string[] = [];
+
+for (const p of allProps) {
+  if (!seen.has(p.name)) { statePairs.push(`${p.name}: ${p.defaultVal ?? 'undefined'}`); seen.add(p.name); }
+}
+for (const d of opts.derived) {
+  if (!seen.has(d.name)) { statePairs.push(`${d.name}: undefined`); seen.add(d.name); }
+}
+for (const v of hoisted.vars) {
+  if (!seen.has(v.name)) { statePairs.push(`${v.name}: ${v.init ?? 'undefined'}`); seen.add(v.name); }
+}
 
     w.emit(`const TW_CSS = ${JSON.stringify(tailwindCss)};
   let __twInjected = false;
@@ -97,6 +104,7 @@ ${opts.esm ? 'export ' : ''}function block_root(ctx){
   // 3.10 emit the custom element shell (plain JS)
   w.emit(makeComponentShell({
     ...opts,
+    props: allProps,
     esm: !!opts.esm
   }, bits, {
     statePairs,
@@ -113,10 +121,44 @@ ${opts.esm ? 'export ' : ''}function block_root(ctx){
   return { code: w.toString() };
 }
 
-// tiny helper: rewrite state names to this.state.X (only if they’re state keys)
+// helper: rewrite state names to this.state.X (only if they’re state keys)
 function rewriteMethodBody(body: string, stateKeys: Set<string>): string {
-  return body.replace(/\b([A-Za-z_]\w*)\b/g, (id) => stateKeys.has(id) ? `this.state.${id}` : id);
+  // 1) Split into spans: normal | "string" | 'string' | `template ${...}`
+  const spans: Array<{kind:'code'|'s'|'d'|'t'; text:string}> = [];
+  let i = 0;
+  while (i < body.length) {
+    const ch = body[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const q = ch; const start = i++; let tplDepth = 0;
+      while (i < body.length) {
+        const c = body[i];
+        if (c === '\\') { i += 2; continue; }
+        if (q === '`' && c === '$' && body[i+1] === '{') { tplDepth++; i += 2; continue; }
+        if (q === '`' && c === '}' && tplDepth) { tplDepth--; i++; continue; }
+        if (c === q && tplDepth === 0) { i++; break; }
+        i++;
+      }
+      spans.push({ kind: q === "'" ? 's' : q === '"' ? 'd' : 't', text: body.slice(start, i) });
+    } else {
+      const start = i;
+      while (i < body.length) {
+        const c = body[i];
+        if (c === '"' || c === "'" || c === '`') break;
+        i++;
+      }
+      spans.push({ kind: 'code', text: body.slice(start, i) });
+    }
+  }
+
+  // 2) Rewrite only in 'code' spans (no .prop, no key:)
+  const rew = (code: string) =>
+    code.replace(/(?<!\.)\b([A-Za-z_]\w*)\b(?!\s*:)/g, (m, id) =>
+      stateKeys.has(id) ? `this.state.${id}` : m
+    );
+
+  return spans.map(s => s.kind === 'code' ? rew(s.text) : s.text).join('');
 }
+
 
 function runtimePreludeInline(){ return `
 function element(n){return document.createElement(n)}

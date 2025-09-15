@@ -140,19 +140,27 @@ private readUnquotedValue(): string {
 
       // default boolean
       let value: string | boolean | undefined = true;
+      let expr: string | undefined;
       if (this.at('EQUALS')) {
         this.eat('EQUALS');
         if (this.at('STRING')) {
           const raw = this.eat('STRING').value ?? '""';
           value = raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw;
+
         } else if (this.at('IDENT') || this.at('NUMBER') || this.at('TEXT')) {
           value = (this.eat().value ?? '').trim();
-        } else {
+        } else if(this.at('LBRACE')){
+          expr = this.readUntilRBrace();
+        }
+        else {
           value = '';
         }
       }
 
-      attrs.push({ name, value });
+      attrs.push(expr != null
+    ? ({ name, kind: 'AttrExpr', expr } as any)
+    : ({ name, value } as any)
+);
     }
 
     // self-closing?
@@ -275,7 +283,7 @@ if (!self && !isClose && !this.isVoid(tag)) {
 // public entry
 export function parseTemplate(src: string): types.ASTNode[] {
   const tokens = tokenize(src);     // your rich lexer
-  //console.log(JSON.stringify(tokens))
+  //console.log(tokens)
   const p = new Parser(tokens);
   return p.parseTemplate();
 }

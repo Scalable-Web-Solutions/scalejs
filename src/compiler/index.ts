@@ -25,7 +25,7 @@ function printAST(ast: ASTNode[]) {
 export async function compile(source: string, opts: CompileOptions) {
   //console.log(source);
   const ast = parseTemplate(source);
-  printAST(ast);
+  //printAST(ast);
   
   const tailwindCss = await buildTailwindFromAst(ast);
   /*tailwindCss.then(css => {
