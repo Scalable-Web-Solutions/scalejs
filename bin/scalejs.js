@@ -1,30 +1,25 @@
 #!/usr/bin/env node
 
-// bin/cli.js — JS CLI that calls into compiled TS in bin-ts/
+// bin/cli.js — JS CLI that calls into compiled TS in dist/ and minifies via bin/build.mjs
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {compileFile} from "../dist/index.js";
+import { compileFile } from "../dist/index.js";
+import { minify } from "./build.mjs";
 
 const argv = process.argv.slice(2);
 
 function usage() {
   console.log(`Usage:
-  scalejs build <input.scale|folder> [--out <file.js>] [--tag <my-tag>]            # single-file mode
-  scalejs build <folder> [--out-dir <dist>] [--liquid-dir <sections>]              # folder mode
+  scalejs build <input.scale|folder> [--out <file.js>] [--tag <my-tag>]
+  scalejs build <folder> [--out-dir <dist>] [--liquid-dir <sections>]
     [--runtime-import <path>] [--block-import <path>]
     [--mode wc|liquid] [--section-name "Section Name"]
     [--esm true|false] [--dev] [--sourcemap]
 
-Examples (single file):
-  scalejs build examples/hero.scale
-  scalejs build examples/hero.scale --out assets/hero.js --tag my-hero
-  scalejs build examples/hero.scale --mode wc --section-name "Hero (ScaleJS)"
-
-Examples (folder):
-  scalejs build src/components
-  scalejs build src/components --out-dir scalejs/components
-  scalejs build src/sections --out-dir assets --liquid-dir sections --mode wc`);
+  scalejs minify
+    # Minifies compiled assets (delegates to build.mjs)
+`);
 }
 
 function getFlag(name) {
@@ -44,11 +39,25 @@ if (argv.length === 0 || argv.includes("-h") || argv.includes("--help") || argv[
 }
 
 const cmd = argv[0];
-if (cmd !== "build") {
-  console.error('✖ Unknown command. Only "build" is supported.\n');
+if (cmd !== "build" && cmd !== "minify") {
+  console.error('✖ Unknown command. Only "build" or "minify" is supported.\n');
   usage();
   process.exit(1);
 }
+
+// --- handle `minify` early and exit ---
+if (cmd === "minify") {
+  try {
+    await minify(); // calls your async minify() from build.mjs
+    console.log("✓ Minified compiled assets");
+    process.exit(0);
+  } catch (e) {
+    console.error(e);
+    process.exit(1);
+  }
+}
+
+// --- from here down is BUILD-only logic ---
 
 // positional input (file or folder)
 const input = argv[1];
@@ -138,7 +147,7 @@ async function buildSingleFile(inputFileAbs) {
     tag,
     runtimeImport,
     blockImport,
-    esm: false, // keep IIFE unless you want to expose flag
+    esm: false, // keep IIFE unless you expose the flag
     dev,
     sourcemap,
     emitLiquid,

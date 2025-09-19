@@ -7,7 +7,7 @@ function camelToKebabLocal(s: string){ return s.replace(/([A-Z])/g,'-$1').toLowe
 export function makeComponentShell(
   opts: CompileOptions,
   bits: Map<string,number>,
-  extra: { statePairs: string[]; methodStubs: string }
+  extra: { statePairs: string[]; methodStubs: string, cssText?: string }
 ){
   const className = pascal(opts.tag);
   const exportKw = opts.esm ? "export " : "";
@@ -20,6 +20,7 @@ export function makeComponentShell(
   }));
 
   const helpers = `
+// === Generic helpers =========================================================
 function kebabToCamel(s){ return s.replace(/-([a-z])/g,(_,c)=>c.toUpperCase()); }
 function camelToKebab(s){ return s.replace(/([A-Z])/g,'-$1').toLowerCase(); }
 function reflectAttr(el, attr, v){
@@ -61,19 +62,77 @@ function installAccessors(klass, propTable){
         if (this.state[name] === v) return;
         this.state[name] = v;
         if (!this._updatingFromAttr) reflectAttr(this, attr, v);
-        // mark dirty and schedule; derived recompute happens during _flush
-        this._dirty |= bit;
+        this._dirty |= bit; // mark dirty; derived recompute happens during _flush
         this._schedule();
       }
     });
   }
 }
+
+// === Shadow DOM style injection =============================================
+// Reuses a single constructable stylesheet per component class when supported.
+function adoptStyles(shadow, klass, cssText){
+  if (!cssText) return;
+
+  // Constructable Stylesheets path
+  try {
+    if ('adoptedStyleSheets' in Document.prototype) {
+      if (!klass._sheet) {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(cssText);
+        klass._sheet = sheet;
+      }
+      const current = shadow.adoptedStyleSheets || [];
+      if (!current.includes(klass._sheet)) {
+        shadow.adoptedStyleSheets = current.concat(klass._sheet);
+      }
+      return;
+    }
+  } catch { /* fall through to <style> */ }
+
+  // Fallback: <style> tag
+  const style = document.createElement('style');
+  style.setAttribute('data-scalejs-style','');
+  style.textContent = cssText;
+  shadow.appendChild(style);
+}
+
+// === Optional Intelligems mirror bridge (light DOM, opt-in) ==================
+// Mirrors expose plain nodes/attrs under the host that external apps can read/write.
+// Enable by adding the 'ig-bridge' attribute to the component tag.
+function createIgBridge(host){
+  const enabled = host.hasAttribute('ig-bridge');
+  if (!enabled) return null;
+
+  const br = document.createElement('div');
+  br.setAttribute('data-ig-bridge','');
+
+  // Visually hidden but NOT display:none (so scripts still see it)
+  br.style.position = 'absolute';
+  br.style.width = '1px';
+  br.style.height = '1px';
+  br.style.overflow = 'hidden';
+  br.style.clipPath = 'inset(50%)';
+  br.style.clip = 'rect(0 0 0 0)';
+  br.style.whiteSpace = 'nowrap';
+
+  // Liberal set of hooks (rename if you know the app's selectors)
+  const price    = document.createElement('span'); price.setAttribute('data-ig-price','');
+  const compare  = document.createElement('span'); compare.setAttribute('data-ig-compare-at','');
+  const variant  = document.createElement('span'); variant.setAttribute('data-ig-variant-id','');
+  const atc      = document.createElement('button'); atc.setAttribute('data-ig-add-to-cart','');
+
+  br.append(price, compare, variant, atc);
+  host.appendChild(br);
+
+  return { br, price, compare, variant, atc };
+}
 `;
 
   const observed = JSON.stringify(propsWithMeta.map(p => p.attr));
-  const propsJSON = JSON.stringify(propsWithMeta); // embed small metadata
+  const propsJSON = JSON.stringify(propsWithMeta);
+  const cssLiteral = JSON.stringify(extra.cssText ?? "");
 
-  // inline derived recomputation (bit-aware)
   const derivedRecompute = opts.derived.map(d => {
     const bit = bits.get(d.name) ?? 0;
     return `
@@ -87,7 +146,6 @@ function installAccessors(klass, propTable){
   }`;
   }).join('\n');
 
-  // initial attribute -> prop sync using accessors (with reflect guard)
   const initialSync = `
     this._updatingFromAttr = true;
     try {
@@ -105,71 +163,251 @@ function installAccessors(klass, propTable){
   const upgradeCalls = propsWithMeta.map(p => `upgradeProperty(this, ${JSON.stringify(p.name)});`).join('\n    ');
 
   return `
-${helpers}
-${exportKw}class ${className} extends HTMLElement {
-  static get observedAttributes(){ return ${observed}; }
-
-  constructor(){
-    super();
-    this._root = null;
-    this._queued = false;
-    this._dirty = 0;
-    this._updatingFromAttr = false;
-    this.state = { ${extra.statePairs.join(', ')} };
-
-    // ensure pre-upgrade instance fields route into accessors
-    ${upgradeCalls}
+  ${helpers}
+  
+  // === CSS scoping for Light DOM ===============================================
+  function scopeCss(css, scopeSel){
+    // very naive but effective:
+    // 1) replace :host(...) and :host with the scopeSel
+    css = css.replace(/:host\\(([^)]*)\\)/g, (_,inner) => scopeSel + inner);
+    css = css.replace(/:host(?![\\w-])/g, scopeSel);
+  
+    // 2) For top-level rules, prefix with scopeSel
+    //    This keeps "img, video, canvas{...}" inside our scope too.
+    css = css.replace(/(^|\\})(\\s*)([^@{}][^{]*)\\{/g, (_, close, ws, pre) => {
+      // If the pre already starts with the scope, keep it
+      const trimmed = pre.trim();
+      if (trimmed.startsWith(scopeSel)) return \`\${close}\${ws}\${pre}{\`;
+      return \`\${close}\${ws}\${scopeSel} \${pre}{\`;
+    });
+  
+    return css;
   }
-
-${extra.methodStubs}
-
-  attributeChangedCallback(name, _oldV, newV){
-    const key = kebabToCamel(name);
-    if (!(key in this.state)) return;
-    const hint = typeof this.state[key];
-    this._updatingFromAttr = true;
-    try {
-      this[key] = coerceFromAttr(newV, hint); // use accessor (reflect suppressed)
-    } finally {
+  
+  // === Style adoption (Shadow vs Light) ========================================
+  // For Shadow: use adoptedStyleSheets when available, fallback <style>.
+  // For Light: inject a <style> under the host with scoped selectors.
+  function applyStyles({ useShadow, shadow, host, klass, cssText, scopeAttrValue }){
+    if (!cssText) return;
+  
+    if (useShadow){
+      // Shadow path (same as before)
+      try {
+        if ('adoptedStyleSheets' in Document.prototype) {
+          if (!klass._sheet) {
+            const sheet = new CSSStyleSheet();
+            sheet.replaceSync(cssText);
+            klass._sheet = sheet;
+          }
+          const current = shadow.adoptedStyleSheets || [];
+          if (!current.includes(klass._sheet)) {
+            shadow.adoptedStyleSheets = current.concat(klass._sheet);
+          }
+          return;
+        }
+      } catch { /* fall through */ }
+  
+      const style = document.createElement('style');
+      style.setAttribute('data-scalejs-style','');
+      style.textContent = cssText;
+      shadow.appendChild(style);
+      return;
+    }
+  
+    // Light DOM path: scope and inject once per instance
+    const scopeSel = \`[data-sws="\${scopeAttrValue}"]\`;
+    const scoped = scopeCss(cssText, scopeSel);
+  
+    // Remove any previous instance style (hot remount safety)
+    const prev = host.querySelector(':scope > style[data-scalejs-style]');
+    if (prev) prev.remove();
+  
+    const style = document.createElement('style');
+    style.setAttribute('data-scalejs-style','');
+    style.textContent = scoped;
+    host.appendChild(style);
+  }
+  
+  ${exportKw}class ${className} extends HTMLElement {
+    static get observedAttributes(){
+      // include your prop attrs, but NOT light-dom (we’ll read it on connect)
+      return ${observed};
+    }
+    static _cssText = ${cssLiteral};
+    static _sheet = null; // for Shadow adoptedStyleSheets
+  
+    constructor(){
+      super();
+  
+      // Mode: Shadow by default, Light if attribute present
+      this._light = this.hasAttribute('light-dom');   // ← attribute switch
+      this._scopeId = \`\${this.tagName.toLowerCase()}-\${Math.random().toString(36).slice(2,8)}\`; // used in Light DOM
+  
+      this._root = null;
+      this._shadow = this._light ? null : this.attachShadow({ mode: 'open' });
+      this._portals = null;
+      this._igBridge = null;
+      this._igObserver = null;
+  
+      // In Light DOM, mark host with scope attribute
+      if (this._light) this.setAttribute('data-sws', this._scopeId);
+  
+      this._queued = false;
+      this._dirty = 0;
       this._updatingFromAttr = false;
+      this.state = { ${extra.statePairs.join(', ')} };
+  
+      // ensure pre-upgrade instance fields route into accessors
+      ${upgradeCalls}
+    }
+  
+  ${extra.methodStubs}
+  
+    attributeChangedCallback(name, _oldV, newV){
+      const key = kebabToCamel(name);
+      if (!(key in this.state)) return;
+      const hint = typeof this.state[key];
+      this._updatingFromAttr = true;
+      try {
+        this[key] = coerceFromAttr(newV, hint); // use accessor (reflect suppressed)
+      } finally {
+        this._updatingFromAttr = false;
+      }
+    }
+  
+    connectedCallback(){
+      // re-check in case attribute was added before connect
+      const desiredLight = this.hasAttribute('light-dom');
+      if (desiredLight !== this._light) {
+        // Simple strategy: hard remount on mode change
+        this.disconnectedCallback?.();
+        this._light = desiredLight;
+        if (this._light && !this.hasAttribute('data-sws')) {
+          this._scopeId = \`\${this.tagName.toLowerCase()}-\${Math.random().toString(36).slice(2,8)}\`;
+          this.setAttribute('data-sws', this._scopeId);
+        }
+        if (!this._light && !this._shadow) this._shadow = this.attachShadow({ mode: 'open' });
+      }
+  
+      // Apply component CSS
+      applyStyles({
+        useShadow: !this._light,
+        shadow: this._shadow,
+        host: this,
+        klass: this.constructor,
+        cssText: (this.constructor)._cssText,
+        scopeAttrValue: this._scopeId
+      });
+  
+      // Sync initial attributes to state
+      ${initialSync}
+  
+      __state = this.state;
+  
+      // Mount point
+      const mount = document.createElement('div');
+      mount.setAttribute('data-root','');
+  
+      if (this._light) {
+        this.appendChild(mount);
+      } else {
+        this._shadow.appendChild(mount);
+      }
+  
+      // (optional) portals container
+      const portals = document.createElement('div');
+      portals.setAttribute('data-scalejs-portals','');
+      if (this._light) this.appendChild(portals); else this._shadow.appendChild(portals);
+      this._portals = portals;
+  
+      // Mount compiled root
+      this._root = block_root(mount);
+      this._root.m({ parent: mount });
+  
+      // Opt-in: light-DOM mirror bridge for external tools
+      this._igBridge = createIgBridge(this);
+      if (this._igBridge) {
+        this._igObserver = new MutationObserver(() => this._syncMirrorsToState());
+        this._igObserver.observe(this._igBridge.br, {
+          subtree: true,
+          characterData: true,
+          childList: true,
+          attributes: true
+        });
+        this._igBridge.atc.addEventListener('click', () => {
+          this.dispatchEvent(new CustomEvent('ig:add-to-cart', { bubbles: true }));
+        });
+        this._syncStateToMirrors();
+      }
+  
+      // initial flush
+      this._schedule();
+    }
+  
+    disconnectedCallback(){
+      if (this._root) { this._root.d(); this._root = null; }
+  
+      if (this._igObserver) this._igObserver.disconnect();
+      this._igObserver = null;
+  
+      if (this._igBridge?.br && this.contains(this._igBridge.br)) {
+        try { this.removeChild(this._igBridge.br); } catch {}
+      }
+      this._igBridge = null;
+  
+      this._portals = null;
+  
+      // In light mode, clean instance <style> on disconnect (optional)
+      if (this._light) {
+        const style = this.querySelector(':scope > style[data-scalejs-style]');
+        if (style) style.remove();
+      }
+    }
+  
+    // ===== Intelligems bridge syncs (unchanged) ================================
+    _syncStateToMirrors(){
+      const B = this._igBridge; if (!B) return;
+      const toStr = v => (v == null ? '' : String(v));
+      const price    = toStr(this.state.price);
+      const compare  = toStr(this.state.compareAt);
+      const variant  = toStr(this.state.variantId);
+      B.price.textContent = price;   B.price.setAttribute('data-value', price);
+      B.compare.textContent = compare; B.compare.setAttribute('data-value', compare);
+      B.variant.textContent = variant; B.variant.setAttribute('data-value', variant);
+    }
+  
+    _syncMirrorsToState(){
+      const B = this._igBridge; if (!B) return;
+      const val = (el) => el.getAttribute('data-value') ?? el.textContent ?? '';
+      const maybeNum = (x) => { const n = Number(x); return Number.isFinite(n) ? n : (x === '' ? null : x); };
+      let dirty = 0;
+      const setIf = (k, v) => { if (this.state[k] !== v) { this.state[k] = v; dirty = 1; } };
+      setIf('price',     maybeNum(val(B.price)));
+      setIf('compareAt', maybeNum(val(B.compare)));
+      setIf('variantId', val(B.variant));
+      if (dirty) this._schedule();
+    }
+  
+    // ============================== Scheduler ==================================
+    _schedule(){
+      if (this._queued) return;
+      this._queued = true;
+      Promise.resolve().then(() => { this._queued = false; this._flush(); });
+    }
+  
+    _flush(){
+      // recompute derived in-place (bit marks propagate)
+      ${derivedRecompute}
+      const d = this._dirty; this._dirty = 0;
+      __state = this.state;
+      this._root && this._root.p(d, this.state);
+      if (this._igBridge) this._syncStateToMirrors();
     }
   }
-
-  connectedCallback(){
-    // optional: your env hook
-    ensureTailwindInHead?.();
-
-    ${initialSync}
-
-    __state = this.state;
-    this._root = block_root(this);
-    this._root.m({ parent: this }); // light DOM
-
-    // trigger an initial flush so derived + UI are consistent
-    this._schedule();
-  }
-
-  disconnectedCallback(){
-    this._root && this._root.d();
-    this._root = null;
-  }
-
-  _schedule(){
-    if (this._queued) return;
-    this._queued = true;
-    Promise.resolve().then(() => { this._queued = false; this._flush(); });
-  }
-
-  _flush(){
-    // recompute derived in-place (bit marks propagate)
-    ${derivedRecompute}
-    const d = this._dirty; this._dirty = 0;
-    __state = this.state;
-    this._root && this._root.p(d, this.state);
-  }
-}
-// Install accessors once using the embedded table
-installAccessors(${className}, ${propsJSON});
-customElements.define(${JSON.stringify(opts.tag)}, ${className});
-`;
+  
+  // Install accessors once using the embedded table
+  installAccessors(${className}, ${propsJSON});
+  customElements.define(${JSON.stringify(opts.tag)}, ${className});
+  `;
+  
 }

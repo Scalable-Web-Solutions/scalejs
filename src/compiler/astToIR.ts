@@ -45,15 +45,21 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
   // helper: get dynamic attr expr from parser value variants
   const braceExpr = /^\{([^}]+)\}$/;
   function getDynamicAttrExpr(a: any): string | null {
-    if (a && typeof a === 'object' && 'expr' in a && typeof a.expr === 'string') {
-      return a.expr.trim();
-    }
-    if (typeof a?.value === 'string') {
-      const m = a.value.match(braceExpr);
-      if (m) return m[1].trim();
-    }
-    return null;
+  // parser-style dynamic attr (name, expr)
+  if (a && typeof a === 'object' && 'expr' in a && typeof a.expr === 'string') {
+    return a.expr.trim();
   }
+  // { expr } wrapper
+  if (typeof a?.value === 'string') {
+    const m = a.value.match(braceExpr);
+    if (m) return m[1].trim();
+  }
+  // NEW: backtick template literal
+  if (typeof a?.value === 'string' && a.value.startsWith('`') && a.value.endsWith('`')) {
+    return a.value; // keep the backticks to evaluate as a JS template literal
+  }
+  return null;
+}
 
   // optional: stable ids for dynamic attrs if your emitter wants them
   let dynAttrSeq = 0;

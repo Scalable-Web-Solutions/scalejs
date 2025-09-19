@@ -26,14 +26,14 @@ export function set_data(t: Text, v: unknown) {
   if (t.nodeValue !== s) t.nodeValue = s;
 }
 
-export function attr(el: Element, name: string, value: unknown) {
-  if (value == null || value === false) {
-    el.removeAttribute(name);
-  } else if (value === true) {
-    el.setAttribute(name, "");
-  } else {
-    el.setAttribute(name, String(value));
+const XLINK_NS = 'http://www.w3.org/1999/xlink';
+function attr(node: Element ,name: string,value: boolean){
+  if(value==null||value===false){ node.removeAttribute(name); return; }
+  if (name === 'xlink:href') {
+    node.setAttributeNS(XLINK_NS, 'href', value===true?'':String(value));
+    return;
   }
+  node.setAttribute(name, value===true?'':String(value));
 }
 
 export function listen<T extends Element>(

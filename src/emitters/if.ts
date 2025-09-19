@@ -4,28 +4,37 @@ import type { IRIf } from "../compiler/types.js";
 import { emitNode } from "./frag.js";
 import { maskOf } from "../codegen/bitmask.js";
 
-export function emitIf(w: Writer, n: IRIf, id: number, bits: Map<string, number>, localsRef: string = 'null', ctxRef: string = 'ctx') {
-  // Optional optimization: only re-evaluate selector when these bits are dirty
+export function emitIf(
+  w: Writer,
+  n: IRIf,
+  id: number,
+  bits: Map<string, number>,
+  localsRef: string = 'null',
+  ctxRef: string = 'ctx',
+  ns: 'html' | 'svg' = 'html'
+) {
+  // Only re-evaluate selector when these bits are dirty
   const selectorMask = maskOf(
     Array.from(new Set(n.branches.flatMap(b => b.stateDeps || []))),
     bits
   );
 
   const sel = `select_if_${id}`;
-const selStateDeps = Array.from(new Set(n.branches.flatMap(b => b.stateDeps || [])));
-const selLocalDeps = Array.from(new Set(n.branches.flatMap(b => b.localDeps || [])));
-const stateDecl = selStateDeps.length ? `const { ${selStateDeps.join(', ')} } = s;` : '';
-const localDecl = selLocalDeps.length ? `const { ${selLocalDeps.join(', ')} } = locals || {};` : '';
-w.emit(`function ${sel}(s, locals){ ${stateDecl} ${localDecl} ${n.branches.map((b,i)=>`if(!!(${b.expr})) return 'b${i}';`).join(' ')} return ${n.elseNode ? `'else'` : 'null'}; }`);
+  const selStateDeps = Array.from(new Set(n.branches.flatMap(b => b.stateDeps || [])));
+  const selLocalDeps = Array.from(new Set(n.branches.flatMap(b => b.localDeps || [])));
+  const stateDecl = selStateDeps.length ? `const { ${selStateDeps.join(', ')} } = s;` : '';
+  const localDecl = selLocalDeps.length ? `const { ${selLocalDeps.join(', ')} } = locals || {};` : '';
 
+  w.emit(`function ${sel}(s, locals){ ${stateDecl} ${localDecl} ${n.branches.map((b,i)=>`if(!!(${b.expr})) return 'b${i}';`).join(' ')} return ${n.elseNode ? `'else'` : 'null'}; }`);
 
   const branches = n.branches.map(
-    (b, i) => `'b${i}': ()=>${emitNode(w, b.node, `${id}_${i}`, bits, localsRef, ctxRef)}`
+    (b, i) => `'b${i}': ()=>${emitNode(w, b.node, `${id}_${i}`, bits, localsRef, ctxRef, ns)}`
   );
-  if (n.elseNode) branches.push(`'else': ()=>${emitNode(w, n.elseNode, `${id}_e`, bits, localsRef, ctxRef)}`);
+  if (n.elseNode) {
+    branches.push(`'else': ()=>${emitNode(w, n.elseNode, `${id}_e`, bits, localsRef, ctxRef, ns)}`);
+  }
 
   const name = `block_if_${id}`;
-  // All emitted code below is pure JS (no TS types, no non-null assertions).
   w.emit(`
 function ${name}(locals, ${ctxRef}){
   let cur = null, key = null, anch;
@@ -40,9 +49,7 @@ function ${name}(locals, ${ctxRef}){
       if (cur) cur.m({ parent: p, anchor: anch });
     },
     p(dirty, s){
-      // If none of the selector's deps changed, just patch current branch.
       if ((dirty & ${selectorMask}) === 0) { cur && cur.p(dirty, s); return; }
-
       const nk = ${sel}(s, locals);
       if (nk === key) { cur && cur.p(dirty, s); return; }
       if (cur) cur.d();

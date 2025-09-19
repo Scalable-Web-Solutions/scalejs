@@ -1,0 +1,89 @@
+<script>
+  export let videoSrc =
+    "https://www.pexels.com/download/video/8419194/";
+
+  export let eyebrow = "OVER 30,000 BOARDS CRAFTED";
+  export let headline = "WE DO SNOWBOARDS RIGHT.";
+  export let subcopy =
+    "Recycled Plastic, Crafted Wood, and Premium Design.";
+  export let cta = "SHOP NOW";
+</script>
+
+<section id="sws-h" class="relative w-full h-screen bg-neutral-100">
+  <div class="">
+    <div class="grid grid-cols-1 lg:grid-cols-2 items-stretch gap-6 lg:gap-10">
+      <div class="relative overflow-hidden shadow-sm bg-black/5 min-h-[40vh] lg:h-screen">
+        <video
+          class="absolute inset-0 h-full w-full object-cover"
+          autoplay
+          muted="true"
+          loop="true"
+          playsinline="true"
+          src={videoSrc}
+        />
+        <div class="absolute inset-0 bg-gradient-to-t from-black/20 to-black/0 pointer-events-none" />
+      </div>
+
+      <div class="flex flex-col justify-center p-5">
+        <div class="inline-flex items-center gap-2 self-start rounded-full bg-[#99c9ff] px-3 py-1 text-xs font-semibold text-lime-900 ring-1 ring-[#d0e6ff]">
+          <span>{eyebrow}</span>
+        </div>
+
+        <div class="mt-4 flex items-center gap-3 text-sm text-neutral-600">
+          <div class="flex items-center">
+            <span aria-hidden="true">★★★★★</span>
+          </div>
+          <span class="h-1 w-1 rounded-full bg-neutral-300" />
+          <span>500+ five-star reviews</span>
+        </div>
+
+        <h1 class="mt-4 text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.05] tracking-tight text-neutral-900">
+          {headline}
+        </h1>
+
+        <p class="mt-4 text-lg text-neutral-700 max-w-2xl">
+          {subcopy}
+        </p>
+
+        <div class="mt-6">
+          <a
+            href="#shop"
+            class="inline-flex items-center justify-center rounded-xl bg-neutral-900 px-6 py-3 text-base font-semibold text-white transition hover:bg-neutral-800 active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+          >
+            {cta}
+          </a>
+        </div>
+
+        <div class="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-neutral-700">
+          <div class="flex items-center gap-2">
+            <span class="i-check" />
+            60-Day Money-Back Guarantee
+          </div>
+          <div class="hidden h-1 w-1 rounded-full bg-neutral-300 sm:block" />
+          <div class="flex items-center gap-2">
+            <span class="i-truck" />
+            Ships in 24 Hours
+          </div>
+        </div>
+
+        <div class="mt-8 grid grid-cols-3 gap-4 max-w-md">
+          <div class="flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-4 text-center">
+            <span class="i-medal" />
+            <span class="text-xs font-medium text-neutral-700">Third-Party Certified</span>
+          </div>
+          <div class="flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-4 text-center">
+            <span class="i-no-sugar" />
+            <span class="text-xs font-medium text-neutral-700">Recycled Plastic</span>
+          </div>
+          <div class="flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-4 text-center">
+            <span class="i-usa" />
+            <span class="text-xs font-medium text-neutral-700">Made in USA</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+</style>

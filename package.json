@@ -17,13 +17,14 @@
   "devDependencies": {
     "@types/node": "^24.3.1",
     "autoprefixer": "^10.4.21",
+    "fast-glob": "^3.3.3",
     "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17",
-    "fast-glob": "^3.3.3"
+    "tailwindcss": "^3.4.17"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
     "esbuild": "^0.25.9",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "user": "^0.0.0"
   }
 }

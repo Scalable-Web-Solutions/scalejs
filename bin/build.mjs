@@ -20,16 +20,18 @@ fs.mkdirSync(outDir, { recursive: true });
 const entryPoints = await fg('**/*.js', { cwd: compiledDir, absolute: true });
 
 // Build & minify each file, preserving structure under /min via outbase
-await build({
-  entryPoints,
-  outdir: outDir,
-  outbase: compiledDir,     // <-- keeps subfolder structure under /min
-  bundle: false,            // one output per input
-  minify: true,
-  sourcemap: true,
-  target: 'es2020',
-  format: 'iife',
-  define: { 'process.env.NODE_ENV': '"production"' },
-});
-
-console.log('✓ built and minified everything in compiled/scalejs → compiled/scalejs/min/');
+export async function minify(){
+  await build({
+    entryPoints,
+    outdir: outDir,
+    outbase: compiledDir,     // <-- keeps subfolder structure under /min
+    bundle: false,            // one output per input
+    minify: true,
+    sourcemap: true,
+    target: 'es2020',
+    format: 'iife',
+    define: { 'process.env.NODE_ENV': '"production"' },
+  });
+  
+  await console.log('✓ built and minified everything in compiled/scalejs → compiled/scalejs/min/');
+}
