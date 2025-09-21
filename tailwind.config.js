@@ -4,4 +4,3 @@ export default {
   theme: { extend: {} },
   safelist: [], // we’ll patch this at runtime if needed
 }
-

@@ -97,10 +97,13 @@ function adoptStyles(shadow, klass, cssText){
   } catch { /* fall through to <style> */ }
 
   // Fallback: <style> tag
-  const style = document.createElement('style');
-  style.setAttribute('data-scalejs-style','');
-  style.textContent = cssText;
-  shadow.appendChild(style);
+  const olds = shadow.querySelectorAll('style[data-scalejs-style]');
+olds.forEach(n => n.remove());
+
+const style = document.createElement('style');
+style.setAttribute('data-scalejs-style','');
+style.textContent = cssText;
+shadow.appendChild(style);
 }
 
 // === Optional Intelligems mirror bridge (light DOM, opt-in) ==================
@@ -134,6 +137,44 @@ function createIgBridge(host){
   return { br, price, compare, variant, atc };
 }
 `;
+
+const hmrBlock = opts.esm ? `
+  // ---- DEV HMR helpers (no-ops in prod) ---------------------------------------
+  const __DEV__ = !!(import.meta && import.meta.hot);
+
+  const __SWS_HMR__ = (__DEV__ ? (globalThis.__SWS_HMR__ ||= {
+    instances: new Map(),
+  }) : null);
+
+  function __sws_track(tag, el){ if (!__DEV__) return;
+    let set = __SWS_HMR__.instances.get(tag);
+    if (!set) __SWS_HMR__.instances.set(tag, set = new Set());
+    set.add(el);
+  }
+  function __sws_untrack(tag, el){ if (!__DEV__) return;
+    __SWS_HMR__.instances.get(tag)?.delete(el);
+  }
+  function __sws_hmr_replace(tag, NextClass){
+    if (!__DEV__) return;
+    const set = __SWS_HMR__.instances.get(tag);
+    if (!set || !set.size) return;
+    for (const el of set) {
+      try {
+        el.disconnectedCallback?.();
+        Object.setPrototypeOf(el, NextClass.prototype);
+        el.connectedCallback?.();
+      } catch (e) { console.warn('[SWS HMR] replace failed for', tag, e); }
+    }
+  }
+` : `
+  // HMR disabled in non-ESM/IIFE build
+  const __DEV__ = false;
+  const __SWS_HMR__ = null;
+  const __sws_track = () => {};
+  const __sws_untrack = () => {};
+  const __sws_hmr_replace = () => {};
+`;
+
 
   const observed = JSON.stringify(propsWithMeta.map(p => p.attr));
   const propsJSON = JSON.stringify(propsWithMeta);
@@ -170,6 +211,8 @@ function createIgBridge(host){
 
   return `
   ${helpers}
+  ${hmrBlock}
+
   
   // === CSS scoping for Light DOM ===============================================
   function scopeCss(css, scopeSel){
@@ -244,6 +287,8 @@ function createIgBridge(host){
   
     constructor(){
       super();
+
+      if (__DEV__) __sws_track(${JSON.stringify(opts.tag)}, this);
   
       // Mode: Shadow by default, Light if attribute present
       this._light = this.hasAttribute('light-dom');   // ← attribute switch
@@ -529,7 +574,7 @@ $debounce(key, fn, ms=120){
     }
   
     disconnectedCallback(){
-    
+      if (__DEV__) __sws_untrack(${JSON.stringify(opts.tag)}, this);
       if (this._root) { this._root.d(); this._root = null; }
 
       if (this._rafId) cancelAnimationFrame(this._rafId), this._rafId = 0;
@@ -619,7 +664,19 @@ $debounce(key, fn, ms=120){
   
   // Install accessors once using the embedded table
   installAccessors(${className}, ${propsJSON});
-  customElements.define(${JSON.stringify(opts.tag)}, ${className});
-  `;
+  const __TAG__ = ${JSON.stringify(opts.tag)};
+
+if (!customElements.get(__TAG__)) {
+  customElements.define(__TAG__, ${className});
+} else if (__DEV__) {
+  // Dev HMR: live-patch all existing instances of this tag
+  __sws_hmr_replace(__TAG__, ${className});
+}
+
+// Vite HMR handshake (module will re-eval on change)
+${opts.esm ? `
+  if (import.meta.hot) {
+    import.meta.hot.accept();
+` : ``}  `;
   
 }
