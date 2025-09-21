@@ -1,3 +1,4 @@
+//parser.ts
 import * as types from "./types.js";
 import { tokenize } from "./lexer.js";
 import { ParseError, makeCodeFrame, tokRepr } from "./diagnostics.js";
@@ -43,13 +44,13 @@ class Parser {
   private last(): types.Token | undefined { return this.tks[this.i - 1]; }
 
   private error(msg: string, atTok?: types.Token, span = 1): never {
-  const anchor = atTok ?? this.peek() ?? this.last();   // ⬅️ NEW fallback
-  const line = anchor?.line ?? -1;
-  const col  = anchor?.col  ?? -1;
-  const frame = (line > 0 && col > 0) ? makeCodeFrame(this.src, line, col, span) : undefined;
-  const phaseMsg = `While parsing ${this.phase}`;
-  throw new ParseError(msg, line, col, frame);
-}
+    const anchor = atTok ?? this.peek() ?? this.last();
+    const line = anchor?.line ?? -1;
+    const col  = anchor?.col  ?? -1;
+    const frame = (line > 0 && col > 0) ? makeCodeFrame(this.src, line, col, span) : undefined;
+    const phaseMsg = `While parsing ${this.phase}`;
+    throw new ParseError(msg, line, col, frame);
+  }
 
   eat(k?: types.TokKind) {
     const t = this.tks[this.i++];
@@ -63,7 +64,6 @@ class Parser {
 
   private ensureProgress(lastI: number, context: string) {
     if (this.i === lastI) {
-      // Don’t spin — bail with context
       const here = this.peek();
       this.error(`Parser made no progress ${context}. Got ${tokRepr(here)}.`, here);
     }
@@ -95,42 +95,6 @@ class Parser {
     return parts.join('');
   }
 
-  // ============ ATTR helpers ============
-  private readAttrName(): string {
-    let name = '';
-    if (this.at('AT')) { this.eat('AT'); name += '@'; }
-    name += this.eat('IDENT').value ?? '';
-    while (this.at('COLON') || this.at('DASH') || this.at('DOT')) {
-      name += this.eat().value ?? '';
-      if (this.at('IDENT')) name += this.eat('IDENT').value ?? '';
-    }
-    return name;
-  }
-
-  private readQuotedStringValue(): string {
-    const raw = this.eat('STRING').value ?? '';
-    const a = raw[0], b = raw[raw.length - 1];
-    if ((a === '"' && b === '"') || (a === "'" && b === "'")) return raw.slice(1, -1);
-    return raw;
-  }
-
-  private isAttrValueStop(): boolean {
-    return this.isWsText(this.peek())
-        || this.at('GT')
-        || (this.at('SLASH') && this.peek(1)?.kind === 'GT');
-  }
-
-  private readUnquotedValue(): string {
-    const parts: string[] = [];
-    while (!this.isAttrValueStop()) {
-      const k = this.peek()?.kind;
-      if (k === 'IDENT' || k === 'NUMBER' || k === 'TEXT' || k === 'DASH' || k === 'DOT' || k === 'COLON') {
-        parts.push(this.eat().value ?? '');
-      } else break;
-    }
-    return parts.join('').trim();
-  }
-
   // ws helpers
   private isWsText(t?: types.Token){ return t?.kind === 'TEXT' && (!t.value || /^\s*$/.test(t.value)); }
   private skipWsText(){ while (this.isWsText(this.peek())) this.i++; }
@@ -143,7 +107,7 @@ class Parser {
     this.enter('nodes');
     const out: types.ASTNode[] = [];
     let buf = '';
-    const flush = () => { if (buf) { out.push({ kind:'Text', value: buf } as any); buf = ''; } };
+    const flush = () => { if (buf) { out.push({ kind:'Text', value: buf }); buf = ''; } };
 
     while (this.i < this.tks.length && !stop()) {
       const before = this.i;
@@ -151,19 +115,30 @@ class Parser {
 
       if (tk.kind === 'LT') { flush(); out.push(this.parseElement()); this.ensureProgress(before, 'inside parseNodes (element)'); continue; }
 
+      if (tk.kind === 'CHAR') {
+        buf += tk.value ?? '';
+        this.i++;
+        this.ensureProgress(before, 'inside parseNodes (char)');
+        continue;
+      }
+
       if (tk.kind === 'LBRACE') {
         const save = this.i; this.i++; this.skipWsText(); const k1 = this.peek()?.kind; this.i = save;
 
         if (k1 === 'HASH_IF')   { flush(); out.push(this.parseIf());   this.ensureProgress(before, 'inside parseNodes (if)'); continue; }
         if (k1 === 'HASH_EACH') { flush(); out.push(this.parseEach()); this.ensureProgress(before, 'inside parseNodes (each)'); continue; }
         if (k1 === 'END_IF' || k1 === 'END_EACH' || k1 === 'ELSE' || k1 === 'ELSE_IF') break;
-
+        
         flush(); out.push(this.parseMustache()); this.ensureProgress(before, 'inside parseNodes (mustache)'); continue;
       }
 
+      // Simple template literal handling (keep it simple for your use case)
       if (tk.kind === 'STRING' && tk.value?.startsWith('`')) {
-        flush(); this.i++; out.push({ kind: 'Mustache', expr: tk.value } as any);
-        this.ensureProgress(before, 'inside parseNodes (template-literal)'); continue;
+        flush(); 
+        this.i++; // consume the template literal token
+        out.push({ kind: 'Mustache', expr: tk.value }); 
+        this.ensureProgress(before, 'inside parseNodes (template-literal)'); 
+        continue;
       }
 
       buf += tk.value ?? ''; this.i++;
@@ -181,7 +156,7 @@ class Parser {
 
     const tagTok = this.eat('IDENT');
     const tag = tagTok.value!;
-    const attrs: Array<{ name:string; value?: string|boolean }> = [];
+    const attrs: types.Attr[] = [];
 
     // attributes
     this.enter('element-attrs');
@@ -192,31 +167,39 @@ class Parser {
       if (this.at('AT')) { this.eat('AT'); name = '@' + (this.eat('IDENT').value!); }
       else if (this.at('IDENT')) { name = this.eat('IDENT').value!; }
       else {
-        // junk token between attrs → log and skip one token
         this.trace('skip junk in attrs:', tokRepr(this.peek()));
         this.i++; continue;
       }
 
-      let value: string | boolean | undefined = true;
-      let expr: string | undefined;
+      let value: string | true = true;
       if (this.at('EQUALS')) {
         this.eat('EQUALS');
         if (this.at('STRING')) {
           const raw = this.eat('STRING').value ?? '""';
-          value = raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw;
+          
+          // Check if it's a template literal - treat as expression
+          if (raw.startsWith('`') && raw.endsWith('`')) {
+            // For template literals, we'll store them as special attributes
+            // The IR builder will handle them as expressions
+            attrs.push({ name, value: raw } as any);
+            continue;
+          } else {
+            // Regular quoted string
+            value = raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw;
+          }
         } else if (this.at('IDENT') || this.at('NUMBER') || this.at('TEXT')) {
           value = (this.eat().value ?? '').trim();
         } else if (this.at('LBRACE')) {
-          expr = this.readUntilRBrace();
+          const expr = this.readUntilRBrace();
+          // Store braced expressions as special format for IR builder
+          attrs.push({ name, value: `{${expr}}` } as any);
+          continue;
         } else {
           value = '';
         }
       }
 
-      attrs.push(expr != null
-        ? ({ name, kind: 'AttrExpr', expr } as any)
-        : ({ name, value } as any)
-      );
+      attrs.push({ name, value });
     }
     this.leave(); // element-attrs
 
@@ -234,7 +217,7 @@ class Parser {
         const closeName = this.eat('IDENT').value!;
         if (closeName !== tag) this.error(`Mismatched </${closeName}> for <${tag}>`, this.peek());
         this.eat('GT');
-        if (raw) children.push({ kind: 'Text', value: raw } as any);
+        if (raw) children.push({ kind: 'Text', value: raw });
       } else {
         this.enter('element-children');
         children.push(...this.parseNodes(() => this.nextIsCloseTag(tag)));
@@ -246,7 +229,7 @@ class Parser {
       }
     }
 
-    return { kind:'Element', tag, attrs, children } as any;
+    return { kind:'Element', tag, attrs, children };
   }
 
   private isVoid(tag: string) {
@@ -262,7 +245,7 @@ class Parser {
     this.enter('mustache');
     const expr = this.readUntilRBrace();
     this.leave();
-    return { kind:'Mustache', expr } as any;
+    return { kind:'Mustache', expr };
   }
 
   private readUntilRBrace(): string {
@@ -305,7 +288,7 @@ class Parser {
     }
 
     this.eatClose('END_IF');
-    return { kind:'IfBlock', branches, elseChildren } as any;
+    return { kind:'IfBlock', branches, elseChildren };
   }
 
   private parseEach(): types.EachBlockNode {
@@ -322,7 +305,7 @@ class Parser {
     const children = this.parseNodes(() => this.nextIs('/each'));
     this.eatClose('END_EACH');
 
-    return { kind:'EachBlock', listExpr, itemName, indexName, children } as any;
+    return { kind:'EachBlock', listExpr, itemName, indexName, children };
   }
 
   private readUntilCloseBraceRaw(): string {
@@ -361,14 +344,11 @@ export function parseTemplate(src: string, opts: ParserOptions = {}): types.ASTN
   } catch (e: any) {
     if (e instanceof ParseError) {
       const frame = e.codeFrame ? `\n${e.codeFrame}\n` : '';
-      // Emit a single concise line + codeframe; keep original stack in dev if wanted
       const where = (e.line > 0 && e.col > 0) ? ` (line ${e.line}, col ${e.col})` : '';
       const msg = `ParseError${where}: ${e.message}${frame}`;
-      // surface for logs; still throw to stop the build
       opts.log?.(msg);
       throw e;
     }
-    // unknown error — rethrow but add last token context if available
     const last = tokens[Math.min(tokens.length - 1, Math.max(0, (e?.i ?? 0) - 1))];
     const line = last?.line ?? -1, col = last?.col ?? -1;
     const frame = (line > 0 && col > 0) ? makeCodeFrame(src, line, col) : undefined;

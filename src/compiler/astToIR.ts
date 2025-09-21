@@ -2,20 +2,37 @@ import { ASTNode, ElementNode, IRAttr, IRNode, IRText, RenderModule } from "./ty
 
 export function astToRenderIR(ast: ASTNode[]): RenderModule {
   const localsStack: Array<Set<string>> = [new Set()];
-  const reserved = new Set(['true','false','null','undefined','this']);
+  const reserved = new Set(['true', 'false', 'null', 'undefined', 'this']);
   let script = '';
 
   const inScope = () => localsStack[localsStack.length - 1];
 
   const splitDeps = (expr: string) => {
     const state = new Set<string>(), local = new Set<string>();
-    const re = /[A-Za-z_][A-Za-z0-9_]*/g; let m: RegExpExecArray | null;
     const scope = inScope();
-    while ((m = re.exec(expr))) {
-      const id = m[0];
-      if (reserved.has(id)) continue;
-      (scope.has(id) ? local : state).add(id);
+
+    if (expr.startsWith('`') && expr.endsWith('`')) {
+      const interpolations = expr.match(/\$\{([^}]+)\}/g) || [];
+      for (const interp of interpolations) {
+        const content = interp.slice(2, -1);
+        const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content))) {
+          const id = m[0];
+          if (reserved.has(id)) continue;
+          (scope.has(id) ? local : state).add(id);
+        }
+      }
+    } else {
+      const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(expr))) {
+        const id = m[0];
+        if (reserved.has(id)) continue;
+        (scope.has(id) ? local : state).add(id);
+      }
     }
+
     return { stateDeps: [...state], localDeps: [...local] };
   };
 
@@ -25,45 +42,55 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
     return null;
   };
 
-  const classes = new Set<string>();
-  function collectClasses(classAttr: string){
-    classAttr.split(/\s+/).filter(Boolean).forEach(c => classes.add(c));
+  function collectClassesInto(classAttr: string, targetSet: Set<string>) {
+    classAttr.split(/\s+/).filter(Boolean).forEach(c => targetSet.add(c));
   }
-  function collectClassesFromExpr(expr: string){
-    // 1) quoted strings
-    for (const m of expr.matchAll(/(['"])(.*?)\1/g)) collectClasses(m[2]);
-    // 2) template literals: only static parts
+
+  function collectClassesFromExprInto(expr: string, targetSet: Set<string>) {
+    // quoted strings
+    for (const m of expr.matchAll(/(['"])(.*?)\1/g)) {
+      collectClassesInto(m[2], targetSet);
+    }
+    // template literals: only static parts
     for (const m of expr.matchAll(/`([^`]*)`/g)) {
-      m[1].split(/\$\{[^}]+\}/g).forEach(frag => collectClasses(frag));
+      m[1].split(/\$\{[^}]+\}/g).forEach(frag => collectClassesInto(frag, targetSet));
     }
-    // 3) arrays/objects: grab any bare words inside
+    // arrays/objects: bare words inside
     for (const m of expr.matchAll(/\[(.*?)\]|\{([^}]+)\}/g)) {
-      collectClasses((m[1] || m[2] || '').replace(/[:,]/g,' '));
+      collectClassesInto((m[1] || m[2] || '').replace(/[:,]/g, ' '), targetSet);
     }
   }
 
-  // helper: get dynamic attr expr from parser value variants
-  const braceExpr = /^\{([^}]+)\}$/;
-  function getDynamicAttrExpr(a: any): string | null {
-  // parser-style dynamic attr (name, expr)
-  if (a && typeof a === 'object' && 'expr' in a && typeof a.expr === 'string') {
-    return a.expr.trim();
-  }
-  // { expr } wrapper
-  if (typeof a?.value === 'string') {
-    const m = a.value.match(braceExpr);
-    if (m) return m[1].trim();
-  }
-  // NEW: backtick template literal
-  if (typeof a?.value === 'string' && a.value.startsWith('`') && a.value.endsWith('`')) {
-    return a.value; // keep the backticks to evaluate as a JS template literal
-  }
-  return null;
-}
+  const braceExpr = /^\{(.+)\}$/s;
 
-  // optional: stable ids for dynamic attrs if your emitter wants them
-  let dynAttrSeq = 0;
-  const nextDynAttrId = () => `attr${dynAttrSeq++}`;
+  // PATCHED: extract inner expression from template literals with single interpolation like `${testClass}`,
+  // so that emitted expression is just 'testClass' instead of the full template string.
+  function getDynamicAttrExpr(a: any): string | null {
+    if (typeof a?.value === 'string') {
+      const braceMatch = a.value.match(braceExpr);
+      if (braceMatch) {
+        const expr = braceMatch[1].trim();
+        if (expr) {
+          return expr;
+        }
+      }
+      if (a.value.startsWith('`') && a.value.endsWith('`')) {
+        const inner = a.value.slice(1, -1);
+        // Detect if inner matches exactly one interpolation ${...}
+        const match = inner.match(/^\$\{(.+)\}$/);
+        if (match) {
+          // Return the inner expression without backticks or ${}
+          return match[1].trim();
+        }
+        // If no match, fallback to returning original value (could be multi-part or complex template literal)
+        return a.value;
+      }
+    }
+    if (a && typeof a === 'object' && 'expr' in a && typeof a.expr === 'string') {
+      return a.expr.trim();
+    }
+    return null;
+  }
 
   const visit = (n: ASTNode): IRNode | null => {
     switch (n.kind) {
@@ -72,59 +99,92 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
 
       case 'Mustache': {
         const { stateDeps, localDeps } = splitDeps(n.expr);
-        return { k:'text', expr:n.expr, stateDeps, localDeps };
+        return { k: 'text', expr: n.expr, stateDeps, localDeps };
       }
 
       case 'Element': {
-        // hoist raw <script> contents
         if (n.tag.toLowerCase() === 'script') {
-          for (const c of n.children) if ((c as any).kind === 'Text') script += (c as any).value;
+          for (const c of n.children) {
+            if (c.kind === 'Text') script += c.value;
+          }
           return null;
         }
 
         const attrs: IRAttr[] = [];
-        const on: { evt: string; handler: string }[] = [];
+        const on: { evt: string; handler: string; stateDeps: string[]; localDeps: string[] }[] = [];
 
-        for (const a of n.attrs as any[]) {
-          // events
+        // New: per-element static class collection set
+        const staticClassHints = new Set<string>();
+
+        for (const a of n.attrs) {
+          // Handle events
           const evt = normEvent(a.name);
           if (evt) {
-            on.push({ evt, handler: String(a.value ?? '') });
+            let handler = '';
+            const dynamicExpr = getDynamicAttrExpr(a);
+            if (dynamicExpr) {
+              handler = dynamicExpr.startsWith('{') && dynamicExpr.endsWith('}')
+                ? dynamicExpr.slice(1, -1).trim()
+                : dynamicExpr;
+            } else if (a.value === true || a.value == null) {
+              handler = `${evt}()`;
+            } else if (typeof a.value === 'string') {
+              handler = a.value.trim();
+            }
+            const { stateDeps, localDeps } = splitDeps(handler);
+            on.push({ evt, handler, stateDeps, localDeps });
             continue;
           }
 
-          // boolean / present-only
-          if (a.value === true || (a.value == null && !('expr' in a))) {
-            if (a.name === 'class') {/* no-op collect for boolean class */}
-            attrs.push({ kind:'static', name:a.name, value:true } as any);
+          // boolean attributes
+          if (a.value === true) {
+            if (a.name === 'class') { /* no-op */ }
+            attrs.push({ kind: 'static', name: a.name, value: true });
             continue;
           }
 
-          // dynamic: either explicit a.expr or "{ … }" wrapper
+          // dynamic expressions
           const expr = getDynamicAttrExpr(a);
           if (expr != null) {
             const { stateDeps, localDeps } = splitDeps(expr);
-            if (a.name === 'class' || a.name === 'className') collectClassesFromExpr(expr);
+            if (a.name === 'class' || a.name === 'className') {
+              collectClassesFromExprInto(expr, staticClassHints);
+            }
             attrs.push({
               kind: 'dynamic',
-              id: nextDynAttrId(),         // optional; include if your emitter wants stable names
               name: a.name,
               expr,
               stateDeps,
               localDeps
-            } as any);
+            });
             continue;
           }
 
           // static string/number
           const val = String(a.value ?? '');
-          if (a.name === 'class' || a.name === 'className') collectClasses(val);
-          attrs.push({ kind:'static', name:a.name, value: val } as any);
+          if (a.name === 'class' || a.name === 'className') {
+            collectClassesInto(val, staticClassHints);
+          }
+          attrs.push({ kind: 'static', name: a.name, value: val });
+        }
+
+        // Merge collected static class hints into one static class attribute if any
+        if (staticClassHints.size > 0) {
+          const staticClassValue = [...staticClassHints].join(' ');
+          const existingStaticClassIndex = attrs.findIndex(a =>
+            a.kind === 'static' && (a.name === 'class' || a.name === 'className')
+          );
+          if (existingStaticClassIndex >= 0) {
+            const existingAttr = attrs[existingStaticClassIndex] as Extract<IRAttr, { kind: 'static' }>;
+            existingAttr.value += ' ' + staticClassValue;
+          } else {
+            attrs.push({ kind: 'static', name: 'class', value: staticClassValue });
+          }
         }
 
         return {
-          k:'elem',
-          tag:n.tag,
+          k: 'elem',
+          tag: n.tag,
           attrs,
           on,
           children: coalesceStatics(n.children.map(visit).filter(Boolean) as IRNode[])
@@ -144,7 +204,7 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
         const elseNode = n.elseChildren?.length
           ? wrapChildren(n.elseChildren.map(visit).filter(Boolean) as IRNode[])
           : undefined;
-        return { k:'if', branches, elseNode };
+        return { k: 'if', branches, elseNode };
       }
 
       case 'EachBlock': {
@@ -161,7 +221,7 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
         localsStack.pop();
 
         return {
-          k:'each',
+          k: 'each',
           listExpr: n.listExpr,
           listStateDeps,
           listLocalDeps,
@@ -176,7 +236,7 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
   const wrapChildren = (kids: IRNode[]): IRNode =>
     kids.length === 1 ? kids[0] : ({ k: 'fragment', children: coalesceStatics(kids) });
 
-  const coalesceStatics = (kids: (IRNode|null)[]): IRNode[] => {
+  const coalesceStatics = (kids: (IRNode | null)[]): IRNode[] => {
     const out: IRNode[] = [];
     for (const k of kids) {
       if (!k) continue;

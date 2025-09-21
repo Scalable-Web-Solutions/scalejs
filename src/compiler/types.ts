@@ -47,7 +47,7 @@ export type TokKind =
   | 'HASH_EACH' | 'END_EACH'
   | 'IDENT' | 'STRING' | 'NUMBER' | 'OTHER'
   | 'LT' | 'GT' | 'SLASH' | 'EQUALS'
-  | 'AT' | 'ONCOLON' | 'COLON' | 'DOT' | 'DASH';
+  | 'AT' | 'ONCOLON' | 'COLON' | 'DOT' | 'DASH' | 'CHAR' | 'TEMPLATE_START' | 'TEMPLATE_TEXT' | 'TEMPLATE_INTERP_START' | 'TEMPLATE_INTERP_END' | 'TEMPLATE_END';
 
 export interface Token {
   kind: TokKind;

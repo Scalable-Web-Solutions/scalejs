@@ -101,7 +101,8 @@ export async function buildTwForTemplate(templateHtml: string): Promise<string> 
   content: ["${html.replace(/\\/g, "\\\\")}"],
   theme: { extend: {} },
   safelist: ${JSON.stringify(safelist)},
-  // corePlugins: { preflight: false }, // uncomment if you don't want resets in shadow DOM
+  
+  //corePlugins: { preflight: false }, // uncomment if you don't want resets in shadow DOM
 }`;
   await fs.writeFile(cfgPath, cfg, "utf8");
 

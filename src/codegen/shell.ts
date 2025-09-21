@@ -52,8 +52,11 @@ function upgradeProperty(el, prop){
 // Install generic getters/setters on the class prototype once
 function installAccessors(klass, propTable){
   const proto = klass.prototype;
+  const reflectMap = klass._reflect || null;           // ← optional per-prop reflect
+  const shouldReflect = (name) => reflectMap ? !!reflectMap[name] : true;
+
   for (const { name, attr, bit } of propTable) {
-    if (Object.getOwnPropertyDescriptor(proto, name)) continue; // don't overwrite
+    if (Object.getOwnPropertyDescriptor(proto, name)) continue;
     Object.defineProperty(proto, name, {
       configurable: true,
       enumerable: true,
@@ -61,13 +64,16 @@ function installAccessors(klass, propTable){
       set(v){
         if (this.state[name] === v) return;
         this.state[name] = v;
-        if (!this._updatingFromAttr) reflectAttr(this, attr, v);
-        this._dirty |= bit; // mark dirty; derived recompute happens during _flush
-        this._schedule();
+        if (!this._updatingFromAttr && shouldReflect(name)) {
+          reflectAttr(this, attr, v);
+        }
+        this._dirty |= bit;
+        if (!this._batching) this._schedule();
       }
     });
   }
 }
+
 
 // === Shadow DOM style injection =============================================
 // Reuses a single constructable stylesheet per component class when supported.
@@ -251,11 +257,23 @@ function createIgBridge(host){
   
       // In Light DOM, mark host with scope attribute
       if (this._light) this.setAttribute('data-sws', this._scopeId);
-  
+
+      this._hook_mount = [];
+      this._hook_before = [];
+      this._hook_after  = [];
+      this._hook_destroy = [];
+      this._mounted = false;
+
+      this._watchers = [];
+      this._debouncers = new Map();
+
       this._queued = false;
       this._dirty = 0;
       this._updatingFromAttr = false;
       this.state = { ${extra.statePairs.join(', ')} };
+
+      this._batching = false;
+      this._rafId = 0;
   
       // ensure pre-upgrade instance fields route into accessors
       ${upgradeCalls}
@@ -274,9 +292,160 @@ function createIgBridge(host){
         this._updatingFromAttr = false;
       }
     }
+
+    $onMount(cb){ if (typeof cb === 'function') this._hook_mount.push(cb); }
+    $beforeUpdate(cb){ if (typeof cb === 'function') this._hook_before.push(cb); }
+    $afterUpdate(cb){ if (typeof cb === 'function') this._hook_after.push(cb); }
+    $onDestroy(cb){
+  if (typeof cb !== 'function') return () => {};
+  this._hook_destroy.push(cb);
+  let done = false;
+  const off = () => {
+    if (done) return;
+    done = true;
+    const i = this._hook_destroy.indexOf(cb);
+    if (i >= 0) this._hook_destroy.splice(i, 1);
+  };
+  return off;
+}
+
+
+    
   
+    $listen(target, type, handler, opts = {}){
+  if (!target || !target.addEventListener) return () => {};
+
+  // opts: { raf?: boolean, throttle?: number, options?: AddEventListenerOptions }
+  const { raf = false, throttle = 0 } = opts;
+  const baseOptions = opts.options || {};
+
+  // Default passive for high-frequency scroll-ish events (unless explicitly set)
+  const needsPassiveDefault = /^(scroll|wheel|touchmove)$/i.test(type);
+  const finalOptions = (needsPassiveDefault && baseOptions.passive == null)
+    ? { ...baseOptions, passive: true }
+    : baseOptions;
+
+  // Compose wrapper: throttle → raf → handler
+  let lastCall = 0;
+  let scheduled = false;
+  let lastEv = null;
+  let rafId = 0;
+
+  const invoke = (ev) => handler.call(this, ev);
+
+  const maybeThrottle = (fn) => {
+    if (!throttle) return fn;
+    return (ev) => {
+      const now = performance.now();
+      if (now - lastCall >= throttle) {
+        lastCall = now;
+        fn(ev);
+      }
+    };
+  };
+
+  const maybeRaf = (fn) => {
+    if (!raf) return fn;
+    return (ev) => {
+      lastEv = ev;
+      if (scheduled) return;
+      scheduled = true;
+      rafId = requestAnimationFrame(() => {
+        scheduled = false;
+        fn(lastEv);
+      });
+    };
+  };
+
+  const wrapped = maybeThrottle(maybeRaf(invoke));
+
+  target.addEventListener(type, wrapped, finalOptions);
+
+  const off = () => {
+    // cancel any pending rAF tick
+    if (raf && rafId) { cancelAnimationFrame(rafId); rafId = 0; scheduled = false; }
+    try { target.removeEventListener(type, wrapped, finalOptions); } catch {}
+    if (finalOptions?.signal) {
+      try { finalOptions.signal.removeEventListener('abort', abortHandler); } catch {}
+    }
+  };
+
+  // Auto-cleanup when an AbortSignal is provided
+  const abortHandler = () => off();
+  if (finalOptions?.signal) {
+    if (finalOptions.signal.aborted) { off(); }
+    else { finalOptions.signal.addEventListener('abort', abortHandler, { once: true }); }
+  }
+
+  // Also clean up with component lifecycle
+  this._hook_destroy.push(off);
+  return off;
+}
+
+
+    $interval(fn, ms){
+      const id = setInterval(() => fn.call(this), ms);
+      const off = () => clearInterval(id);
+      this._hook_destroy.push(off);
+      return off;
+    }
+
+    $timeout(fn, ms){
+      const id = setTimeout(() => fn.call(this), ms);
+      const off = () => clearTimeout(id);
+      this._hook_destroy.push(off);
+      return off;
+    }
+
+    //expose bits
+    static _bits = ${JSON.stringify(Object.fromEntries(bits))};
+
+    $bindEvent(target, type, map, opts){
+  return this.$listen(target, type, (ev) => {
+    const patch = map.call(this, ev) || {};
+    let mask = 0, touchedViaAccessor = false;
+
+    this._batching = true;                 // ← begin batch
+    for (const k in patch) {
+      const next = patch[k], cur = this.state[k];
+      if (cur === next) continue;
+      const desc = Object.getOwnPropertyDescriptor(this.constructor.prototype, k);
+      if (desc && typeof desc.set === 'function') { this[k] = next; touchedViaAccessor = true; }
+      else { this.state[k] = next; mask |= (this.constructor._bits?.[k] || 0); }
+    }
+    this._batching = false;                // ← end batch
+
+    if (mask) this._dirty |= mask;
+    if (mask || touchedViaAccessor) this._schedule();
+  }, opts);
+}
+
+
+$watch(keys, fn){
+  const arr = Array.isArray(keys) ? keys : [keys];
+  const mask = arr.reduce((m,k)=> m | (this.constructor._bits?.[k] || 0), 0);
+  const w = { mask, fn };
+  this._watchers.push(w);
+  const off = () => {
+    const i = this._watchers.indexOf(w);
+    if (i >= 0) this._watchers.splice(i, 1);
+  };
+  this._hook_destroy.push(off);
+  return off;
+}
+
+$debounce(key, fn, ms=120){
+  const map = this._debouncers;
+  if (map.has(key)) clearTimeout(map.get(key));
+  const id = setTimeout(() => { map.delete(key); fn.call(this); }, ms);
+  map.set(key, id);
+  const off = () => { if (map.get(key) === id) { clearTimeout(id); map.delete(key); } };
+  this._hook_destroy.push(off);
+  return off;
+}
+
     connectedCallback(){
-      // re-check in case attribute was added before connect
+    // re-check in case attribute was added before connect
       const desiredLight = this.hasAttribute('light-dom');
       if (desiredLight !== this._light) {
         // Simple strategy: hard remount on mode change
@@ -321,8 +490,23 @@ function createIgBridge(host){
       this._portals = portals;
   
       // Mount compiled root
-      this._root = block_root(mount);
+      this._root = block_root(this);
       this._root.m({ parent: mount });
+
+      // Lifecycle functions
+      if (typeof this.onMount === 'function') {
+        const cleanup = this.onMount.call(this);
+        if (typeof cleanup === 'function') this._hook_destroy.push(cleanup);
+      }
+
+      for (const cb of this._hook_mount) {
+        try {
+          const ret = cb.call(this);
+          if (typeof ret === 'function') this._hook_destroy.push(ret);
+        } catch (e) { /* optionally log */ }
+      }
+      this._hook_mount.length = 0;
+      this._mounted = true;
   
       // Opt-in: light-DOM mirror bridge for external tools
       this._igBridge = createIgBridge(this);
@@ -345,8 +529,16 @@ function createIgBridge(host){
     }
   
     disconnectedCallback(){
+    
       if (this._root) { this._root.d(); this._root = null; }
-  
+
+      if (this._rafId) cancelAnimationFrame(this._rafId), this._rafId = 0;
+
+      if (typeof this.onDestroy === 'function') { try { this.onDestroy.call(this); } catch(e){} }
+      
+      for (const cb of this._hook_destroy) { try { cb.call(this); } catch(e){} }
+      this._hook_destroy.length = 0;
+
       if (this._igObserver) this._igObserver.disconnect();
       this._igObserver = null;
   
@@ -392,17 +584,37 @@ function createIgBridge(host){
     _schedule(){
       if (this._queued) return;
       this._queued = true;
-      Promise.resolve().then(() => { this._queued = false; this._flush(); });
+      this._rafId = requestAnimationFrame(() => { this._queued = false; this._flush(); });
     }
   
     _flush(){
-      // recompute derived in-place (bit marks propagate)
-      ${derivedRecompute}
-      const d = this._dirty; this._dirty = 0;
-      __state = this.state;
-      this._root && this._root.p(d, this.state);
-      if (this._igBridge) this._syncStateToMirrors();
+  ${derivedRecompute}
+  const d = this._dirty; this._dirty = 0;
+
+  if (d) {
+    // BEFORE UPDATE (state changed)
+    for (const cb of this._hook_before) { try { cb.call(this); } catch(e){} }
+    if (typeof this.beforeUpdate === 'function') { try { this.beforeUpdate.call(this); } catch(e){} }
+  }
+
+  __state = this.state;
+  this._root && this._root.p(d, this.state);
+  if (this._igBridge) this._syncStateToMirrors();
+
+  if (d) {
+    // WATCHERS AFTER DOM PATCH
+    const ws = this._watchers;
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i];
+      if (d & w.mask) { try { w.fn.call(this, d, this.state); } catch(e){} }
     }
+
+    // AFTER UPDATE
+    if (typeof this.afterUpdate === 'function') { try { this.afterUpdate.call(this); } catch(e){} }
+    for (const cb of this._hook_after) { try { cb.call(this); } catch(e){} }
+  }
+}
+
   }
   
   // Install accessors once using the embedded table

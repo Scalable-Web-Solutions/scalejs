@@ -33,5 +33,6 @@ export async function compile(source: string, opts: CompileOptions) {
   });*/
 
   const ir = astToRenderIR(ast);
+  //console.log(JSON.stringify(ir))
   return generate(ir, opts, await tailwindCss);
 }
