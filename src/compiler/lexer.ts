@@ -240,8 +240,8 @@ export function tokenize(input: string): types.Token[] {
              keyword === '/if' ? 'END_IF' :
              'END_EACH', keyword, s.pos, s.line, s.col);
         
-        if (keyword.startsWith(':') || keyword.startsWith('/')) {
-          // These keywords should be immediately followed by }
+        if (keyword === ':else' || keyword === '/if' || keyword === '/each') {
+          // These keywords never take an expression and should be immediately followed by }
           readWhile(c => /\s/.test(c));
           if (peek() !== '}') lexError(`Expected '}' after ${keyword}`, open);
           const close = snap();
