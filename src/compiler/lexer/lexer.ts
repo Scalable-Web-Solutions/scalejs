@@ -1,5 +1,5 @@
 // lexer.ts
-import * as types from "./types.js";
+import * as types from "../types.js";
 
 /* -------------------- Diagnostics -------------------- */
 class LexError extends Error {

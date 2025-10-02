@@ -1,5 +1,5 @@
 import * as types from "./types.js";
-import { tokenize } from "./lexer.js";
+import { tokenize } from "./lexer/index.js";
 import { ParseError, makeCodeFrame, tokRepr } from "./diagnostics.js";
 
 type Phase =
