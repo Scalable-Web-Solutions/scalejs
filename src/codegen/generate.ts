@@ -120,6 +120,13 @@ ${opts.esm ? 'export ' : ''}function block_root(ctx){
     cssText, // <—— key change: styles go straight into the shadow root
   }));
 
+  // — emit Tailwind hint comment so JIT can see class names when scanning built JS
+  if (ir.tailwindHints && ir.tailwindHints.length) {
+    const uniq = Array.from(new Set(ir.tailwindHints)).sort();
+    // Keep it simple: a single-line comment is enough for Tailwind content scanners
+    w.emit(`/* tailwind-safelist: ${uniq.join(' ')} */`);
+  }
+
   // — footer for IIFE
   if (!opts.esm) {
     w.emit(`  global.ScaleJS = global.ScaleJS || {};`);

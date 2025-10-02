@@ -1,4 +1,4 @@
-import { ASTNode, ElementNode, IRAttr, IRNode, IRText, RenderModule } from "./types.js";
+﻿import { ASTNode, ElementNode, IRAttr, IRNode, IRText, RenderModule } from "./types.js";
 
 export function astToRenderIR(ast: ASTNode[]): RenderModule {
   const localsStack: Array<Set<string>> = [new Set()];
@@ -113,8 +113,8 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
         const attrs: IRAttr[] = [];
         const on: { evt: string; handler: string; stateDeps: string[]; localDeps: string[] }[] = [];
 
-        // New: per-element static class collection set
-        const staticClassHints = new Set<string>();
+        // New: per-element static class collection set for Tailwind hints only
+        const tailwindHints = new Set<string>();
 
         for (const a of n.attrs) {
           // Handle events
@@ -126,6 +126,15 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
               handler = dynamicExpr.startsWith('{') && dynamicExpr.endsWith('}')
                 ? dynamicExpr.slice(1, -1).trim()
                 : dynamicExpr;
+              
+              // Fix: Ensure bare identifiers are invoked as functions
+              if (handler && !handler.includes('(') && !handler.includes('=>')) {
+                // Check if it's a simple identifier (not a complex expression)
+                const isSimpleIdentifier = /^[A-Za-z_][A-Za-z0-9_]*$/.test(handler.trim());
+                if (isSimpleIdentifier) {
+                  handler = `${handler}(ev)`;
+                }
+              }
             } else if (a.value === true || a.value == null) {
               handler = `${evt}()`;
             } else if (typeof a.value === 'string') {
@@ -148,7 +157,8 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
           if (expr != null) {
             const { stateDeps, localDeps } = splitDeps(expr);
             if (a.name === 'class' || a.name === 'className') {
-              collectClassesFromExprInto(expr, staticClassHints);
+              // Only collect for Tailwind hints, not for runtime class attribute
+              collectClassesFromExprInto(expr, tailwindHints);
             }
             attrs.push({
               kind: 'dynamic',
@@ -163,24 +173,15 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
           // static string/number
           const val = String(a.value ?? '');
           if (a.name === 'class' || a.name === 'className') {
-            collectClassesInto(val, staticClassHints);
+            // Only collect for Tailwind hints, not for runtime class attribute
+            collectClassesInto(val, tailwindHints);
           }
           attrs.push({ kind: 'static', name: a.name, value: val });
         }
 
-        // Merge collected static class hints into one static class attribute if any
-        if (staticClassHints.size > 0) {
-          const staticClassValue = [...staticClassHints].join(' ');
-          const existingStaticClassIndex = attrs.findIndex(a =>
-            a.kind === 'static' && (a.name === 'class' || a.name === 'className')
-          );
-          if (existingStaticClassIndex >= 0) {
-            const existingAttr = attrs[existingStaticClassIndex] as Extract<IRAttr, { kind: 'static' }>;
-            existingAttr.value += ' ' + staticClassValue;
-          } else {
-            attrs.push({ kind: 'static', name: 'class', value: staticClassValue });
-          }
-        }
+        // Note: We no longer merge tailwindHints into the actual class attribute
+        // This prevents conditionally-applied classes from being permanently stuck on elements
+        // The tailwindHints are collected for build-time analysis only
 
         return {
           k: 'elem',
@@ -251,5 +252,31 @@ export function astToRenderIR(ast: ASTNode[]): RenderModule {
   };
 
   const nodes = ast.map(visit).filter(Boolean) as IRNode[];
-  return { nodes, script };
+  // Gather Tailwind hints from any element attrs we collected locally
+  const tw = new Set<string>();
+  // Since we only collected into a local set per element, re-scan attributes for static strings
+  // and strings inside dynamic expressions to extract possible class tokens for Tailwind JIT.
+  const visitForHints = (node: IRNode) => {
+    if (node.k === 'elem') {
+      for (const a of node.attrs) {
+        if (a.name === 'class' || a.name === 'className') {
+          if (a.kind === 'static' && typeof a.value === 'string') {
+            a.value.split(/\s+/).filter(Boolean).forEach(c => tw.add(c));
+          } else if (a.kind === 'dynamic') {
+            collectClassesFromExprInto(a.expr, tw);
+          }
+        }
+      }
+      node.children.forEach(visitForHints);
+    } else if (node.k === 'fragment') {
+      node.children.forEach(visitForHints);
+    } else if (node.k === 'if') {
+      node.branches.forEach(b => visitForHints(b.node));
+      if (node.elseNode) visitForHints(node.elseNode);
+    } else if (node.k === 'each') {
+      visitForHints(node.node);
+    }
+  };
+  nodes.forEach(visitForHints);
+  return { nodes, script, tailwindHints: [...tw] };
 }

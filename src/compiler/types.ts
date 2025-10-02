@@ -41,18 +41,22 @@ export interface EachBlockNode {
   children: ASTNode[];
 }
 
+// types.ts
 export type TokKind =
-  | 'TEXT' | 'LBRACE' | 'RBRACE'
-  | 'HASH_IF' | 'ELSE_IF' | 'ELSE' | 'END_IF'
-  | 'HASH_EACH' | 'END_EACH'
-  | 'IDENT' | 'STRING' | 'NUMBER' | 'OTHER'
-  | 'LT' | 'GT' | 'SLASH' | 'EQUALS'
-  | 'AT' | 'ONCOLON' | 'COLON' | 'DOT' | 'DASH' | 'CHAR' | 'TEMPLATE_START' | 'TEMPLATE_TEXT' | 'TEMPLATE_INTERP_START' | 'TEMPLATE_INTERP_END' | 'TEMPLATE_END';
+  | "TEXT" | "LBRACE" | "RBRACE"
+  | "HASH_IF" | "ELSE_IF" | "ELSE" | "END_IF" | "HASH_EACH" | "END_EACH"
+  | "IDENT" | "STRING" | "NUMBER" | "CHAR"
+  | "LT" | "GT" | "SLASH" | "EQUALS" | "AT" | "ONCOLON" | "COLON" | "DOT" | "DASH"
+  // new:
+  | "AT_IF" | "AT_ELSEIF" | "AT_ELSE" | "AT_ENDIF"
+  | "AT_FOREACH" | "AT_ENDFOREACH";
 
 export interface Token {
   kind: TokKind;
   value?: string;
-  pos: number; line: number; col: number;
+  pos: number;
+  line: number;
+  col: number;
 }
 
 export interface Prop {
@@ -128,4 +132,5 @@ export type IRNode = IRText | IRElem | IRIf | IREach | IRFragment;
 export type RenderModule = {
   nodes: IRNode[];
   script?: string;     // raw script content
+  tailwindHints?: string[]; // collected class names for Tailwind JIT safelisting
 };
