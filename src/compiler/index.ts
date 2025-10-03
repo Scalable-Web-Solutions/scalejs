@@ -1,5 +1,4 @@
 // compiler/index.ts
-import { tokenize } from './lexer/lexer.js';
 import { astToRenderIR } from './astToIR.js';
 import { generate } from '../codegen/generate.js';
 import { ASTNode, Derived, Prop } from './types.js';

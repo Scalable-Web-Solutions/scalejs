@@ -13,12 +13,15 @@ export function tokenize(input: string): Token[] {
   const push = (kind: TokKind, value?: string, s = st.snap()) =>
     out.push({ kind, value, pos: s.pos, line: s.line, col: s.col });
 
-  const { readEscape, readQuotedString, readTemplateLiteral } = makeStrings({
-    peek: () => st.peek(),
+  const readers = makeStrings({
+    peek: (n?: number) => st.peek(n),
     advance: () => st.advance(),
     snap: () => st.snap(),
-    lexError: (msg, anchor, span) => { throw new LexError(msg, anchor?.line ?? st.line, anchor?.col ?? st.col, input, span); },
+    lexError: (msg, anchor, span) => {
+      throw new LexError(msg, anchor?.line ?? st.line, anchor?.col ?? st.col, input, span);
+    },
   });
+  const { readQuotedString, readTemplateLiteral, readEscape } = readers;
 
   while (st.pos < st.codepoints.length) {
     const ch = st.peek();
@@ -43,7 +46,7 @@ export function tokenize(input: string): Token[] {
           const close = st.snap(); st.advance(); push("RBRACE", "}", close); continue;
         }
         const bodyStart = st.snap();
-        const body = directives.readExpressionBody(st, input);
+        const body = directives.readExpressionBody(st, input, readers);
         if (body.trim()) push("TEXT", body, bodyStart);
         if (st.peek() !== "}") throw new LexError("Unterminated expression", open.line, open.col, input);
         const close = st.snap(); st.advance(); push("RBRACE", "}", close);
@@ -52,7 +55,8 @@ export function tokenize(input: string): Token[] {
 
       // generic { expr }
       const bodyStart = st.snap();
-      const body = directives.readExpressionBody(st, input);
+      if (readers === undefined) break;
+      const body = directives.readExpressionBody(st, input, readers);
       if (body.trim()) push("TEXT", body, bodyStart);
       if (st.peek() !== "}") throw new LexError("Unterminated expression", open.line, open.col, input);
       const close = st.snap(); st.advance(); push("RBRACE", "}", close);

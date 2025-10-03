@@ -7,10 +7,11 @@
   export let subcopy =
     "Recycled Plastic, Crafted Wood, and Premium Design.";
   export let cta = "SHOP NOW";
+  export let testStyle = "bg-green-500";
 </script>
 
 <section id="sws-h" class="relative w-full h-screen bg-neutral-100">
-  <div class="">
+  <div class={`${testStyle}`}>
     <div class="grid grid-cols-1 lg:grid-cols-2 items-stretch gap-6 lg:gap-10">
       <div class="relative overflow-hidden shadow-sm bg-black/5 min-h-[40vh] lg:h-screen">
         <video
