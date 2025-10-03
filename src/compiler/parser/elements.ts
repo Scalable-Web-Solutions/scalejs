@@ -1,5 +1,5 @@
 import type { Parser } from "./core.js";
-import * as types from "../types.js";
+import * as types from "../util/types.js";
 
 export function parseElement(p: Parser): types.ElementNode {
   p.enter("element-open");

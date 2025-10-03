@@ -12,8 +12,8 @@ export async function compileFile(opts: {
   inlineRuntime?: boolean;
   runtimeImport?: string;
   blockImport?: string;
-  props?: import("./compiler/types.js").Prop[];
-  derived?: import("./compiler/types.js").Derived[];
+  props?: import("./compiler/util/types.js").Prop[];
+  derived?: import("./compiler/util/types.js").Derived[];
   esm?: boolean;
   dev?: boolean;
   sourcemap?: boolean;

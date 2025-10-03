@@ -1,7 +1,7 @@
 // emitters/each.ts
 import { maskOf } from "../codegen/bitmask.js";
 import { Writer } from "../codegen/writer.js";
-import type { IREach } from "../compiler/types.js";
+import type { IREach } from "../compiler/util/types.js";
 import { emitNode } from "./frag.js";
 
 export function emitEach(

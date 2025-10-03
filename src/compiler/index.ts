@@ -1,9 +1,9 @@
 // compiler/index.ts
-import { astToRenderIR } from './astToIR.js';
 import { generate } from '../codegen/generate.js';
-import { ASTNode, Derived, Prop } from './types.js';
-import { parseTemplate } from './parser.js';
-import { buildTailwindFromAst } from './tailwind.js';
+import { ASTNode, Derived, Prop } from './util/types.js';
+import { buildTailwindFromAst } from './util/tailwind.js';
+import { parseTemplate } from './parser/index.js';
+import { astToRenderIR } from './ir/index.js';
 
 
 export type CompileOptions = {

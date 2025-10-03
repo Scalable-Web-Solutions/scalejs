@@ -1,7 +1,7 @@
 // emitters/text.ts
 import { maskOf } from "../codegen/bitmask.js";
 import { Writer } from "../codegen/writer.js";
-import type { IRText } from "../compiler/types.js";
+import type { IRText } from "../compiler/util/types.js";
 import { emitNode } from "./frag.js";
 
 // emitters/text.ts

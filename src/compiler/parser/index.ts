@@ -1,7 +1,7 @@
 import { tokenize } from "../lexer/index.js";
 import { Parser } from "./core.js";
-import { ParseError, makeCodeFrame } from "../diagnostics.js";
-import * as types from "../types.js";
+import { ParseError, makeCodeFrame } from "./diagnostics.js";
+import * as types from "../util/types.js";
 
 export function parseTemplate(
   src: string,

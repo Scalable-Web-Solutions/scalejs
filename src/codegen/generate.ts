@@ -1,11 +1,10 @@
 // codegen/generate.ts
 import { Writer } from './writer.js';
 import { buildBitMapFromNames } from './bitmask.js';
-import { IRNode, RenderModule } from '../compiler/types.js';
+import { IRNode, RenderModule } from '../compiler/util/types.js';
 import { CompileOptions } from '../compiler/index.js';
 import { emitNode } from '../emitters/frag.js';
 import { makeComponentShell } from './shell.js';
-import { astToRenderIR } from '../compiler/astToIR.js';
 import { hoistScript } from './hoistScript.js';
 
 const STYLEBRIDGE = `

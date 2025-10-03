@@ -1,6 +1,6 @@
 // emitters/frag.ts
 import { Writer } from "../codegen/writer.js";
-import type { IRNode } from "../compiler/types.js";
+import type { IRNode } from "../compiler/util/types.js";
 import { emitEach } from "./each.js";
 import { emitElem } from "./elem.js";
 import { emitIf } from "./if.js";

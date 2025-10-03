@@ -1,6 +1,6 @@
 // emitters/if.ts
 import { Writer } from "../codegen/writer.js";
-import type { IRIf } from "../compiler/types.js";
+import type { IRIf } from "../compiler/util/types.js";
 import { emitNode } from "./frag.js";
 import { maskOf } from "../codegen/bitmask.js";
 

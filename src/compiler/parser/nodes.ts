@@ -1,8 +1,10 @@
 import type { Parser } from "./core.js";
-import * as types from "../types.js";
+import * as types from "../util/types.js";
 
 export function parseTemplate(p: Parser): types.ASTNode[] {
-  return parseNodes(p, () => false);
+  const nodes = parseNodes(p, () => false);
+  // strip whitespace text top level
+  return nodes.filter(n => !(n.kind === "Text" && (!n.value || /^\s*$/.test(n.value))));
 }
 
 export function parseNodes(p: Parser, stop: () => boolean): types.ASTNode[] {

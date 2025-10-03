@@ -1,4 +1,4 @@
-import { Derived, Prop } from "../compiler/types.js";
+import { Derived, Prop } from "../compiler/util/types.js";
 
 // codegen/bitmask.ts
 export function buildBitMap(props: Prop[], derived: Derived[]) {

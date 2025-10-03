@@ -1,6 +1,6 @@
 import { maskOf } from "../codegen/bitmask.js";
 import { Writer } from "../codegen/writer.js";
-import type { IRElem } from "../compiler/types.js";
+import type { IRElem } from "../compiler/util/types.js";
 import { emitNode } from "./frag.js";
 
 // add ns param, default 'html'

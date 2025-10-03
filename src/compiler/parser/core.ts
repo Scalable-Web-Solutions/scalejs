@@ -1,5 +1,5 @@
-import * as types from "../types.js";
-import { ParseError, makeCodeFrame } from "../diagnostics.js";
+import * as types from "../util/types.js";
+import { ParseError, makeCodeFrame } from "./diagnostics.js";
 
 // ---- Core Parser class: ctor + shared helpers only ----
 export class Parser {
